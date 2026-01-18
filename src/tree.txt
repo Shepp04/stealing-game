@@ -1,0 +1,107 @@
+src
+├── _game_data
+│   ├── resolver
+│   │   └── init.luau
+│   └── source
+│       ├── data_types
+│       │   └── _TemplateDataType.luau
+│       └── init.luau
+├── _monetisation
+│   ├── resolver
+│   │   └── init.luau
+│   └── source
+│       ├── init.luau
+│       └── ProductDefs.luau
+├── _systems
+│   ├── TemplateSystem
+│   │   ├── client
+│   │   │   ├── components
+│   │   │   ├── controllers
+│   │   │   └── utils
+│   │   ├── data_types
+│   │   │   └── Fruits.luau
+│   │   ├── server
+│   │   │   ├── classes
+│   │   │   ├── packages
+│   │   │   └── services
+│   │   └── shared
+│   │       ├── assets
+│   │       │   ├── models
+│   │       │   └── ui
+│   │       ├── classes
+│   │       └── config
+│   └── TemplateSystem copy
+│       ├── client
+│       │   ├── components
+│       │   ├── controllers
+│       │   └── utils
+│       ├── data_types
+│       │   └── Fruits2.luau
+│       ├── server
+│       │   ├── classes
+│       │   ├── packages
+│       │   └── services
+│       └── shared
+│           ├── assets
+│           │   ├── models
+│           │   └── ui
+│           ├── classes
+│           └── config
+├── _types
+│   ├── Data.luau
+│   ├── init.luau
+│   └── Services.luau
+├── client
+│   ├── Bootstrap.client.luau
+│   ├── components
+│   │   └── _TemplateComponent.luau
+│   ├── controllers
+│   │   ├── _TemplateController.luau
+│   │   ├── init.luau
+│   │   └── UX
+│   │       ├── BouncingButton.luau
+│   │       ├── ColourChange.luau
+│   │       ├── ExpandingButton.luau
+│   │       ├── init.luau
+│   │       ├── RotatingElement.luau
+│   │       └── SwingingElement.luau
+│   └── utils
+│       ├── _TemplateUtil.luau
+│       └── GuiRefs.luau
+├── server
+│   ├── Bootstrap.server.luau
+│   ├── classes
+│   ├── packages
+│   │   ├── _TemplatePackage.luau
+│   │   ├── DataManager.luau
+│   │   ├── init.luau
+│   │   └── ProfileStore.luau
+│   └── services
+│       ├── _TemplateService.luau
+│       ├── DataInterface.luau
+│       ├── init.luau
+│       └── PlayerService.luau
+├── shared
+│   ├── assets
+│   │   ├── models
+│   │   └── ui
+│   │       └── MonetisationOverlay.rbxmx
+│   ├── classes
+│   ├── config
+│   │   ├── _TemplateConfig.luau
+│   │   ├── Data.luau
+│   │   ├── General.luau
+│   │   ├── init.luau
+│   │   ├── Players.luau
+│   │   └── Sounds.luau
+│   └── packages
+│       ├── _TemplatePackage.luau
+│       ├── Bindables.luau
+│       ├── Debounce.luau
+│       ├── init.luau
+│       ├── Remotes.luau
+│       ├── ReplicatedData.luau
+│       └── Sounds.luau
+└── tree.txt
+
+58 directories, 47 files

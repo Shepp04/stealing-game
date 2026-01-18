@@ -1,0 +1,14 @@
+{
+    "name": "woolly",
+    "bin": {
+        "woolly": "./tools/woolly.js"
+    },
+    "scripts": {
+        "setup": "node tools/bootstrap.js",
+        "woolly": "node tools/woolly.js",
+        "gen": "node tools/woolly.js gen",
+        "serve": "node tools/woolly.js serve",
+        "build": "node tools/woolly.js build"
+    },
+    "version": "0.3.0"
+}
