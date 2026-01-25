@@ -45,6 +45,12 @@
             "CurrencyValueGui": {
               "$path": "src/_systems/currency/shared/assets/ui/CurrencyValueGui.rbxmx"
             },
+            "LeaveMatchGui": {
+              "$path": "src/_systems/matches/shared/assets/ui/LeaveMatchGui.rbxmx"
+            },
+            "TierGui": {
+              "$path": "src/_systems/matches/shared/assets/ui/TierGui.rbxmx"
+            },
             "Nametag": {
               "$path": "src/_systems/nametags/shared/assets/ui/Nametag.rbxmx"
             },
@@ -85,11 +91,17 @@
           "CurrencyService": {
             "$path": "src/_systems/currency/server/services/CurrencyService.luau"
           },
+          "MatchService": {
+            "$path": "src/_systems/matches/server/services/MatchService.luau"
+          },
           "NametagService": {
             "$path": "src/_systems/nametags/server/services/NametagService.luau"
           },
           "SocialService": {
             "$path": "src/_systems/social/server/services/SocialService.luau"
+          },
+          "StealingService": {
+            "$path": "src/_systems/stealing/server/services/StealingService.luau"
           }
         },
         "Packages": {
@@ -134,6 +146,15 @@
             },
             "social": {
               "$className": "Folder"
+            },
+            "stealing": {
+              "$className": "Folder",
+              "DevProducts": {
+                "$path": "src/_systems/stealing/monetisation/DevProducts.luau"
+              },
+              "Gamepasses": {
+                "$path": "src/_systems/stealing/monetisation/Gamepasses.luau"
+              }
             }
           },
           "Aggregator": {
@@ -144,6 +165,9 @@
           "$className": "Folder",
           "Game": {
             "$path": "src/_systems/matches/server/classes/Game.luau"
+          },
+          "MatchTable": {
+            "$path": "src/_systems/matches/server/classes/MatchTable.luau"
           }
         },
         "GameDataMaster": {
@@ -181,8 +205,14 @@
             "UICurrencyController": {
               "$path": "src/_systems/currency/client/controllers/UICurrencyController.luau"
             },
+            "MatchController": {
+              "$path": "src/_systems/matches/client/controllers/MatchController.luau"
+            },
             "SocialController": {
               "$path": "src/_systems/social/client/controllers/SocialController.luau"
+            },
+            "StealController": {
+              "$path": "src/_systems/stealing/client/controllers/StealController.luau"
             }
           },
           "Components": {
@@ -192,6 +222,12 @@
             },
             "CurrencyDisplay": {
               "$path": "src/_systems/currency/client/components/CurrencyDisplay.luau"
+            },
+            "GameCamera": {
+              "$path": "src/_systems/matches/client/components/GameCamera.luau"
+            },
+            "GameHUD": {
+              "$path": "src/_systems/matches/client/components/GameHUD.luau"
             },
             "FriendAlert": {
               "$path": "src/_systems/social/client/components/FriendAlert.luau"

@@ -9,30 +9,38 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 -- // Types
 local GameTypes = require(ReplicatedStorage.Shared.Types.Game)
+type GameContext = GameTypes.GameContext
 type GameBroadcastState = GameTypes.GameBroadcastState
 type GameAction = GameTypes.GameAction
 type TurnType = GameTypes.TurnType
-type ItemType = GameTypes.ItemType
+type ItemContent = GameTypes.ItemContent
 
-export type GameContext = {
- 	tableInstance: Instance,
-	numItems: number,
-	shuffleSpeed: number?,
+type ItemState = {
+	instance: Model,
+	posIndex: number,
+	content: ItemContent,
+}
 
-	getPlayers: () -> { Player },
-	send: (player: Player, kind: GameBroadcastState, ...any) -> (),
-	broadcast: (kind: GameBroadcastState, ...any) -> (),
+type BoardState = {
+	ownerUserId: number,
+	items: { ItemState },
+	positions: { CFrame }, -- static slot transforms
+	winningItemChosen: boolean,
 }
 
 export type GameState = {
-	-- Define game state properties here
-	turnUserId: number?,
-	turnType: TurnType?,
-	numItems: number,
-	shuffleSpeed: number?,
+	phase: TurnType,
 	timeoutSeconds: number,
 
-	userItems: { [number]: { instance: Instance, position: number, type: ItemType } }, -- userId -> item instances
+	attackerUserId: number?, -- chooser
+	defenderUserId: number?, -- whose board is being attacked (also shuffler by default)
+	activeBoardUserId: number?,
+
+	boards: { [number]: BoardState },
+
+	-- shuffle settings per current turn
+	shuffleBeats: number,
+	beatDuration: number,
 }
 
 local ServicesTypes = require(ReplicatedStorage.Shared.Types.Services)
@@ -61,31 +69,16 @@ export type Opts = {
 	-- args used when constructing the class
 	onGameEnd: ((winner: Player?) -> ()),
 	ctx: GameContext,
+	tunables: Tunables?, -- optional overrides per round/table
 }
 
 export type GameAPI = {
-	_opts: Opts,
-	_conns: { RBXScriptConnection },
-
 	ctx: GameContext,
 	gameState: GameState,
 
-	Init: (self: GameAPI) -> (),
+	Start: (self: GameAPI) -> (),
 	Destroy: (self: GameAPI) -> (),
-
-	Start: (self: GameAPI, ctx: GameContext) -> (),
-	EndMatch: (self: GameAPI) -> (),
-	HandleAction: (self: GameAPI, player: Player, name: string, payload: any) -> (),
-
-	GetTurn: (self: GameAPI) -> (number?, TurnType?),
-	GetOpponentUserId: (self: GameAPI, userId: number) -> number?,
-	SetTurn: (self: GameAPI, userId: number, turnType: TurnType) -> (),
-
-	-- Game Logic
-	SetSpecialItem: (self: GameAPI, player: Player, itemIndex: number) -> boolean,
-	StartShuffle: (self: GameAPI, player: Player) -> boolean,
-	StopShuffle: (self: GameAPI, player: Player) -> boolean,
-	SelectItem: (self: GameAPI, player: Player, itemIndex: number) -> boolean,
+	HandleAction: (self: GameAPI, player: Player, action: GameAction, payload: any) -> (),
 }
 
 local Game = {}
@@ -94,450 +87,546 @@ Game.__index = Game
 -- // Internal state
 local _deps: Deps?
 
+-- // Constants
+local SAMPLE_ITEM_MODEL = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Models"):WaitForChild("Items"):WaitForChild("SampleItem") :: Model
+
+-- ========== Helpers ========== --
+
+local function clampInt(x: number, lo: number, hi: number): number
+	if x < lo then return lo end
+	if x > hi then return hi end
+	return x
+end
+
 -- ========== Constructor ========== --
 
 function Game.new(deps: Deps, opts: Opts): GameAPI
-	_deps = deps
-
-	local self = setmetatable({} :: any, Game) :: GameAPI
+	local self = setmetatable({}, Game) :: any
+	self._deps = deps
 	self._opts = opts
-	self._conns = {}
-
-	self._onGameEnd = opts.onGameEnd
 	self.ctx = opts.ctx
+	self._onGameEnd = opts.onGameEnd
 
-	-- Get remotes
-	self._gameStateRemote = _deps.SharedPackages.Remotes:GetRemote("RemoteEvent", "GameState") :: RemoteEvent
-	self._gameActionRemote = _deps.SharedPackages.Remotes:GetRemote("RemoteEvent", "GameAction") :: RemoteEvent
-	
-	-- Initialise state
+	self._tunables = table.clone(deps.Tunables or {})
+	if opts.tunables then
+		for k, v in pairs(opts.tunables) do
+			self._tunables[k] = v
+		end
+	end
+
 	self.gameState = {
-		turnUserId = nil,
-		numItems = self.ctx.numItems,
-		shuffleSpeed = self.ctx.shuffleSpeed or 0.5,
-		timeoutSeconds = 30,
-		userItems = {},
+		phase = "Setup",
+		timeoutSeconds = self:_t("turnTimeout", 20),
+
+		attackerUserId = nil,
+		defenderUserId = nil,
+		activeBoardUserId = nil,
+
+		boards = {},
+
+		shuffleBeats = 4,
+		beatDuration = 0.45,
 	} :: GameState
 
-	return self
+	self._turnToken = 0
+	self._dead = false
+	self._conns = {}
+
+	return (self :: any) :: GameAPI
 end
 
 -- ========== Public API ========== --
 
-function Game:GetTurn(): (number?, TurnType?)
-	return self.gameState.turnUserId, self.gameState.turnType
+function Game:Start()
+	local players = self.ctx.getPlayers()
+	assert(#players == 2, "Game expects exactly 2 players")
+
+	-- Spawn boards for each player
+	for seatIndex, plr in ipairs(players) do
+		self:_spawnBoardForPlayer(plr, seatIndex)
+	end
+
+	-- Broadcast round begin
+	self.ctx.broadcast("RoundBegin", {
+		userIds = { userId1 = players[1].UserId, userId2 = players[2].UserId },
+	})
+
+	-- Setup phase: both choose winning item simultaneously (timeout auto)
+	self.gameState.phase = "Setup"
+	self:_nextTurnToken()
+	self.ctx.broadcast("Turn", { phase = "Setup" })
+
+	local setupSeconds = self:_t("setupTimeout", 12)
+	self:_armTurnTimeout(setupSeconds, function()
+		-- auto-pick winning item for anyone who hasn't chosen
+		for _, plr in ipairs(players) do
+			local board = self.gameState.boards[plr.UserId]
+			if board and not board.winningItemChosen then
+				self:_autoSetWinningItem(plr.UserId)
+			else
+				warn("No board found for player ", plr.Name)
+			end
+		end
+		-- if both chosen now, start the duel loop
+		self:_tryBeginDuel()
+	end)
+
+	-- Optional: tell clients to show “Pick where to hide winning item”
+	for _, plr in ipairs(players) do
+		self.ctx.send(plr, "AutoAction", { kind = "PromptSetWinningItem" })
+	end
 end
 
-function Game:GetOpponentUserId(userId: number): number?
-	for otherUserId, _ in self.gameState.userItems do
-		if otherUserId ~= userId then
-			return otherUserId
+-- ===== Actions ===== --
+
+function Game:HandleAction(player: Player, action: GameAction, payload: any)
+	if self._dead then return end
+
+	if action == "SetWinningItem" then
+		if self.gameState.phase ~= "Setup" then return end
+		local itemIndex = payload.itemIndex :: number
+		self:_setWinningItem(player.UserId, itemIndex)
+		self:_tryBeginDuel()
+		return
+	end
+
+	if action == "SelectItem" then
+		if self.gameState.phase ~= "Choose" then return end
+		if player.UserId ~= self.gameState.attackerUserId then return end
+		local itemIndex = payload.itemIndex :: number
+		self:_resolvePick(player.UserId, itemIndex)
+		return
+	end
+
+	-- Keep open for manual shuffler UX later:
+	-- if action == "ShuffleInput" then
+	--   validate shufflerUserId == defenderUserId
+	--   apply provided pairs as a beat (or stream)
+	-- end
+end
+
+-- ========== Internal ========== --
+
+-- ===== Internal Helpers ===== --
+function Game:_t(key: string, defaultValue: any): any
+	local v = self._tunables[key]
+	if v == nil then
+		return defaultValue
+	end
+	return v
+end
+
+function Game:_tryBeginDuel()
+	print("Trying to begin duel...")
+	local players = self.ctx.getPlayers()
+	local b1 = self.gameState.boards[players[1].UserId]
+	local b2 = self.gameState.boards[players[2].UserId]
+	if not b1 or not b2 then warn("Missing boards for players") return end
+	if not b1.winningItemChosen or not b2.winningItemChosen then warn("Winning items not chosen yet") return end
+
+	-- Assign contents once both winning items are chosen
+	self:_assignBoardContents(players[1].UserId)
+	self:_assignBoardContents(players[2].UserId)
+
+	-- Choose starting attacker randomly (or seat 1 for now)
+	local startIdx = (self:_t("randomFirst", true) and math.random(1, 2)) or 1
+	local attacker = players[startIdx]
+	local defender = players[3 - startIdx]
+
+	self:_beginTurn(attacker.UserId, defender.UserId)
+end
+
+function Game:_setWinningItem(userId: number, itemIndex: number)
+	print("Setting winning item for userId=", userId, " itemIndex=", itemIndex)
+	local board = self.gameState.boards[userId]
+	if not board or board.winningItemChosen then warn("No board found or winning item already chosen for userId=", userId) return end
+
+	itemIndex = clampInt(itemIndex, 1, #board.items)
+	-- mark winning item placeholder; actual contents assigned later
+	board.winningItemChosen = true
+	board._winningItemIndex = itemIndex
+
+	self.ctx.broadcast("AutoAction", {
+		kind = "SetWinningItem",
+		userId = userId,
+		itemIndex = itemIndex,
+	})
+end
+
+function Game:_autoSetWinningItem(userId: number)
+	print("Auto-setting winning item for userId=", userId)
+	local board = self.gameState.boards[userId]
+	if not board or board.winningItemChosen then warn("No board found or winning item already chosen for userId=", userId, board, board and board.winningItemChosen) return end
+	local idx = math.random(1, #board.items)
+	self:_setWinningItem(userId, idx)
+end
+
+function Game:_assignBoardContents(userId: number)
+	local board = self.gameState.boards[userId]
+	if not board then return end
+
+	local n = #board.items
+	local numLosingItems = clampInt(self:_t("numLosingItems", 2), 0, n - 1)
+	local numEmpty = clampInt(self:_t("numEmptySafe", n - 1 - numLosingItems), 0, n - 1 - numLosingItems)
+	-- 1 winning item always
+
+	-- clear first
+	for _, item in ipairs(board.items) do
+		item.content = "Empty"
+	end
+
+	local winningItemIndex = board._winningItemIndex or math.random(1, n)
+	board.items[winningItemIndex].content = "WinningItem"
+
+	-- fill losing items + empties in remaining slots
+	local remaining = {}
+	for i = 1, n do
+		if i ~= winningItemIndex then
+			table.insert(remaining, i)
 		end
 	end
-	return nil
+
+	-- shuffle remaining
+	for i = #remaining, 2, -1 do
+		local j = math.random(1, i)
+		remaining[i], remaining[j] = remaining[j], remaining[i]
+	end
+
+	-- losing items first
+	for i = 1, numLosingItems do
+		local idx = remaining[i]
+		board.items[idx].content = "LosingItem"
+	end
+
+	-- remaining are empty safe (already Empty)
 end
 
-function Game:SetTurn(userId: number, turnType: TurnType)
-	self.gameState.turnUserId = userId
-	self.gameState.turnType = turnType
+-- ===== Turn Loop ===== --
 
-	-- invalidate any existing turn timeouts
+function Game:_beginTurn(attackerUserId: number, defenderUserId: number)
+	print("Beginning turn: attacker=", attackerUserId, " defender=", defenderUserId)
+	self.gameState.attackerUserId = attackerUserId
+	self.gameState.defenderUserId = defenderUserId
+	self.gameState.activeBoardUserId = defenderUserId
+
+	-- Phase: Reveal to attacker (losing item mask of defender board)
+	self.gameState.phase = "Shuffle"
 	self:_nextTurnToken()
 
 	self.ctx.broadcast("Turn", {
-		turnUserId = userId,
-		turnType = turnType,
+		phase = "Shuffle",
+		attackerUserId = attackerUserId,
+		defenderUserId = defenderUserId,
 	})
 
-	local timeoutSeconds = self.gameState.timeoutSeconds
+	self:_revealLosingItemMask(attackerUserId, defenderUserId)
 
-	-- // Arm turn timeout logic
-	if turnType == "Hider" then
-		self:_armTurnTimeout(timeoutSeconds, function()
-			-- Auto-set special item and advance
-			self:_autoSetSpecialItemFor(userId)
-
-			local player = Players:GetPlayerByUserId(userId)
-			if player then
-				-- Advance to Shuffler turn
-				self:SetTurn(userId, "Shuffler")
-			end
-		end)
-	end
-	
-	if turnType == "Shuffler" then
-		-- Start shuffling immediately
-		local player = Players:GetPlayerByUserId(userId)
-		if player then
-			self:StartShuffle(player)
-		end
-
-		self:_armTurnTimeout(timeoutSeconds, function()
-			-- Auto-stop shuffle and pass to Chooser
-			local plr = Players:GetPlayerByUserId(userId)
-			if plr then
-				self:StopShuffle(plr)
-			end
-		end)
-	end
-	
-	if turnType == "Chooser" then
-		self:_armTurnTimeout(timeoutSeconds, function()
-			-- Auto-select an item
-			local player = Players:GetPlayerByUserId(userId)
-			if player then
-				self:_autoSelectFor(player)
-			end
-		end)
-	end
+	-- Now scramble (auto for MVP; later you can replace this with manual driver)
+	self:_runAutoScramble(defenderUserId, function()
+		-- After scramble, attacker chooses
+		self:_beginChoose(attackerUserId)
+	end)
 end
 
-function Game:Start(players: { Player })
-	--[[
-		Flow:
-		- Generate items for each player
-		- Notify players of round begin
-		- Choose starting player (shuffler)
-		- Set camera targets
-	]]
-	-- Generate items
-	for i, plr in players do
-		-- Generate item slots for each player
-		local playerSlotsFolder = self.ctx.tableInstance:FindFirstChild("PlayerSlots") :: Folder?
-		local playerFolder = playerSlotsFolder and playerSlotsFolder:FindFirstChild("Player" .. tostring(i)) :: Folder?
-		if not playerFolder then
-			warn("[Game] No player folder found for player", plr.Name)
-			continue
-		end
+function Game:_beginChoose(attackerUserId: number)
+	if self._dead then return end
+	self.gameState.phase = "Choose"
+	self:_nextTurnToken()
 
-		local itemSpawn = playerFolder:FindFirstChild("ItemSpawn") :: BasePart?
-		if not itemSpawn then
-			warn("[Game] No item spawn found for player", plr.Name)
-			continue
-		end
+	self.ctx.broadcast("Turn", { phase = "Choose", attackerUserId = attackerUserId })
 
-		local itemsFolder = playerFolder:FindFirstChild("Items") :: Folder?
-		if not itemsFolder then
-			warn("[Game] No items folder found for player", plr.Name)
-			continue
-		end
+	local chooseSeconds = self:_t("chooseTimeout", 8)
+	self:_armTurnTimeout(chooseSeconds, function()
+		-- auto pick (random live item)
+		local defenderUserId = self.gameState.defenderUserId
+		if not defenderUserId then return end
+		local board = self.gameState.boards[defenderUserId]
+		if not board or #board.items == 0 then return end
+		local idx = math.random(1, #board.items)
+		self:_resolvePick(attackerUserId, idx)
+	end)
+end
 
-		self:_spawnItemsForPlayer(plr, self.gameState.numItems, itemSpawn.CFrame, itemsFolder)
-	end
+function Game:_resolvePick(attackerUserId: number, itemIndex: number)
+	if self._dead then return end
+	local defenderUserId = self.gameState.defenderUserId
+	if not defenderUserId then return end
 
-	-- Notify players of round begin
-	self.ctx.broadcast("RoundBegin", {
-		numItems = self.gameState.numItems,
-		userIds = table.map(players, function(p) return p.UserId end),
-		tableInstance = self.ctx.tableInstance,
+	local board = self.gameState.boards[defenderUserId]
+	if not board then return end
+
+	itemIndex = clampInt(itemIndex, 1, #board.items)
+	local item = board.items[itemIndex]
+	if not item then return end
+
+	-- Reveal to all (client can animate opening)
+	self.ctx.broadcast("AutoAction", {
+		kind = "RevealItem",
+		defenderUserId = defenderUserId,
+		itemIndex = itemIndex,
+		content = item.content,
 	})
 
-	-- Choose starting player (shuffler)
-	local startingPlayer = players[1]
-	self:SetTurn(startingPlayer.UserId, "Hider")
+	if item.content == "LosingItem" then
+		-- attacker loses, defender wins round
+		local winner = Players:GetPlayerByUserId(defenderUserId)
+		self:_endRound(winner)
+		return
+	end
+
+	if item.content == "WinningItem" then
+		-- attacker wins round
+		local winner = Players:GetPlayerByUserId(attackerUserId)
+		self:_endRound(winner)
+		return
+	end
+
+	-- Empty safe: remove this item and swap roles
+	self:_removeItem(defenderUserId, itemIndex)
+
+	-- Swap attacker/defender
+	local newAttacker = defenderUserId
+	local newDefender = attackerUserId
+	self:_beginTurn(newAttacker, newDefender)
 end
 
-function Game:End(winner: Player?)
-	-- Notify players of round end
+function Game:_endRound(winner: Player?)
+	if self._dead then return end
+	self._dead = true
+	self:_nextTurnToken()
+
 	self.ctx.broadcast("RoundEnd", {
 		winnerUserId = if winner then winner.UserId else nil,
 	})
 
-	-- Call the game end callback
 	if self._onGameEnd then
 		self._onGameEnd(winner)
 	end
 end
 
-function Game:HandleAction(player: Player, action: GameAction, payload: any)
-	-- Only the active player may act
-	local turnUserId, turnType = self:GetTurn()
-	if player.UserId ~= turnUserId then
-		warn("Player", player.Name, "tried to perform action", action, "out of turn")
-		return
+-- ===== Reveal and Shuffle ===== --
+function Game:_revealLosingItemMask(attackerUserId: number, defenderUserId: number)
+	local board = self.gameState.boards[defenderUserId]
+	if not board then return end
+
+	local mask = {}
+	for i, item in ipairs(board.items) do
+		mask[i] = (item.content == "LosingItem") -- true if losing item, false otherwise
 	end
 
-	-- // Hider Logic
-	if turnType == "Hider" then
-		if action == "SetSpecialItem" then
-			local itemIndex = payload.itemIndex :: number
-			local ok = self:SetSpecialItem(player, itemIndex)
-		end
-	end
-
-	-- // Shuffle Logic
-	if turnType == "Shuffler" then
-		if action == "StopShuffle" then
-			local ok = self:StopShuffle(player)
-		end
-	end
-
-	-- // Choose Logic
-	if turnType == "Chooser" then
-		if action == "SelectItem" then
-			local itemIndex = payload.itemIndex :: number
-			local ok = self:SelectItem(player, itemIndex)
-		end
+	local attacker = Players:GetPlayerByUserId(attackerUserId)
+	if attacker then
+		self.ctx.send(attacker, "Reveal", {
+			defenderUserId = defenderUserId,
+			losingItemMask = mask,
+			revealSeconds = self:_t("revealSeconds", 1.25),
+		})
 	end
 end
 
--- ========== Game Logic ========== --
+-- Pluggable: swap this method later to manual shuffle driver
+function Game:_runAutoScramble(defenderUserId: number, onDone: () -> ())
+	local board = self.gameState.boards[defenderUserId]
+	if not board then onDone(); return end
 
-function Game:SetSpecialItem(player: Player, itemIndex: number): boolean
-	-- Check that the turn type is Hider
-	local turnUserId, turnType = self:GetTurn()
-	if turnType ~= "Hider" then
-		warn("Player", player.Name, "tried to set special item but the turn type is not Hider")
-		return false
-	end
+	local n = #board.items
+	local baseBeats = self:_t("shuffleBeats", 4)
+	local beatDuration = self:_t("beatDuration", 0.45)
 
-	-- Check that it's this player's turn
-	if player.UserId ~= turnUserId then
-		warn("Player", player.Name, "tried to set special item out of turn")
-		return false
-	end
+	-- Simple escalation as board shrinks
+	local beats = clampInt(baseBeats + (6 - n), 2, 8)
 
-	-- Find the player's items
-	local playerItems = self.gameState.userItems[player.UserId]
-	if not playerItems then
-		warn("No items found for player", player.Name)
-		return false
-	end
+	self.gameState.shuffleBeats = beats
+	self.gameState.beatDuration = beatDuration
 
-	-- Check if this is a valid item index
-	if itemIndex < 1 or itemIndex > #playerItems then
-		warn("Player", player.Name, "tried to set special item with invalid index", itemIndex)
-		return false
-	end
-
-	-- Mark only the selected item as special
-	for _, itemData in playerItems do
-		itemData.type = "Bad" -- Reset all items to normal (Bad)
-	end
-	playerItems[itemIndex].type = "Good" -- Mark the item as special (Good)
-
-	-- Advance to shuffling
-	self:SetTurn(player.UserId, "Shuffler")
-	return true -- Success
-end
-
-function Game:StartShuffle(player: Player): boolean
-	-- Check that shuffling is allowed
-	local turnUserId, turnType = self:GetTurn()
-	if turnType ~= "Shuffler" then
-		warn("Player", player.Name, "tried to start shuffle but the turn type is not Shuffler")
-		return false
-	end
-	-- Check that it's this player's turn
-	if player.UserId ~= turnUserId then
-		warn("Player", player.Name, "tried to start shuffle out of turn")
-		return false
-	end
-
-	-- Use a token-based strategy to handle shuffling
-	self._shuffleToken = (self._shuffleToken or 0) + 1
-	local currentToken = self._shuffleToken
-	local userId = player.UserId
-
+	-- Run beats sequentially
+	local token = self:_nextTurnToken()
 	task.spawn(function()
-		while task.wait() do
-			-- Check that the current token is still valid
-			if self._shuffleToken ~= currentToken then
-				break
-			end
-			-- Perform a shuffle action (swap two random items)
-			local numItems = self.gameState.numItems
-			local idx1 = math.random(1, numItems)
-			local idx2 = math.random(1, numItems)
-			while idx2 == idx1 do
-				idx2 = math.random(1, numItems)
-				task.wait(0)
-			end
-			self:_swapItemPositions(userId, idx1, idx2)
-			task.wait(self.gameState.shuffleSpeed or 0.5)
+		for _ = 1, beats do
+			if self._dead or self._turnToken ~= token then return end
+
+			local pairs = self:_makeDisjointSwapPairs(#board.items)
+			-- broadcast for client animation
+			self.ctx.broadcast("ShuffleBeat", {
+				defenderUserId = defenderUserId,
+				pairs = pairs,
+				beatDuration = beatDuration,
+			})
+
+			-- apply swap on server (instant or after duration; instant is OK for MVP)
+			self:_applySwapPairs(defenderUserId, pairs)
+
+			task.wait(beatDuration)
 		end
+
+		if self._dead or self._turnToken ~= token then return end
+		onDone()
 	end)
-
-	return true
 end
 
-function Game:StopShuffle(player: Player): boolean
-	-- Check that shuffling is in progress
-	local turnUserId, turnType = self:GetTurn()
-	if turnType ~= "Shuffler" then
-		warn("Player", player.Name, "tried to stop shuffle but the turn type is not Shuffler")
-		return false
+function Game:_makeDisjointSwapPairs(n: number): { {a: number, b: number} }
+	-- Returns disjoint swap pairs covering ~half the items.
+	-- Example for n=6 -> 3 pairs; n=5 -> 2 pairs
+	local idxs = {}
+	for i = 1, n do idxs[i] = i end
+	for i = n, 2, -1 do
+		local j = math.random(1, i)
+		idxs[i], idxs[j] = idxs[j], idxs[i]
 	end
 
-	-- Invalidate the current shuffle token to stop shuffling
-	self._shuffleToken = nil
-
-	-- Transition to Chooser turn
-	local chooserUserId = self:GetOpponentUserId(turnUserId)
-	if not chooserUserId then
-		warn("No opponent found to become chooser")
-		return false
+	local pairs = {}
+	local i = 1
+	while i < n do
+		table.insert(pairs, { a = idxs[i], b = idxs[i + 1] })
+		i += 2
 	end
-	self:SetTurn(chooserUserId, "Chooser")
-	return true
+	return pairs
 end
 
-function Game:SelectItem(player: Player, itemIndex: number): boolean
-	-- Check that the turn type is Chooser
-	local turnUserId, turnType = self:GetTurn()
-	if turnType ~= "Chooser" then
-		warn("Player", player.Name, "tried to select item but the turn type is not Chooser")
-		return false
-	end
+function Game:_applySwapPairs(defenderUserId: number, pairs: { {a: number, b: number} })
+	local board = self.gameState.boards[defenderUserId]
+	if not board then return end
 
-	-- Check that it's this player's turn
-	if player.UserId ~= turnUserId then
-		warn("Player", player.Name, "tried to select item out of turn")
-		return false
-	end
-
-	-- Find the opponent's items
-	local opponentUserId = self:GetOpponentUserId(player.UserId)
-	if not opponentUserId then
-		warn("No opponent found for player", player.Name)
-		return false
-	end
-
-	local opponentItems = self.gameState.userItems[opponentUserId]
-	if not opponentItems then
-		warn("No items found for opponent of player", player.Name)
-		return false
-	end
-
-	-- Check if this is the special item
-	local selectedItem = opponentItems[itemIndex]
-	if not selectedItem then
-		warn("Player", player.Name, "tried to select invalid item index", itemIndex)
-		return false
-	end
-
-	if selectedItem.type == "Good" then
-		-- This player wins the game (round)
-		self.ctx.send(player, "YourResult", { result = "Correct" })
-		local opponentPlayer = game.Players:GetPlayerByUserId(opponentUserId)
-		if opponentPlayer then
-			self.ctx.send(opponentPlayer, "TheirResult", { result = "Correct" })
-		end
-
-		self:End(player)
-	else
-		-- Chooser loses, hider wins
-		self.ctx.send(player, "YourResult", { result = "Incorrect" })
-		local opponentPlayer = Players:GetPlayerByUserId(opponentUserId)
-		if opponentPlayer then
-			self.ctx.send(opponentPlayer, "TheirResult", { result = "Incorrect" })
-			self:End(opponentPlayer)
-		else
-			self:End(nil)
+	for _, p in ipairs(pairs) do
+		local a = board.items[p.a]
+		local b = board.items[p.b]
+		if a and b then
+			a.posIndex, b.posIndex = b.posIndex, a.posIndex
 		end
 	end
-	return true
+
+	-- Reposition moved items to their slot CFrames (lerp)
+	for _, item in ipairs(board.items) do
+		local slotCF = board.positions[item.posIndex]
+		if slotCF then
+			-- Lerp to new position
+			task.spawn(function()
+				local startCF = item.instance:GetPivot()
+				local duration = self.gameState.beatDuration * 0.8
+				local elapsed = 0
+				while elapsed < duration do
+					local alpha = elapsed / duration
+					local newCF = startCF:Lerp(slotCF, alpha)
+					item.instance:PivotTo(newCF)
+					task.wait()
+					elapsed += task.wait()
+				end
+				item.instance:PivotTo(slotCF)
+			end)
+		end
+	end
 end
 
-function Game:_autoSetSpecialItemFor(userId: number)
-	local items = self.gameState.userItems[userId]
-	if not items or #items == 0 then return end
-	local idx = math.random(1, #items)
+-- ===== Board Management ===== --
+function Game:_removeItem(boardUserId: number, itemIndex: number)
+	local board = self.gameState.boards[boardUserId]
+	if not board then return end
+	local item = board.items[itemIndex]
+	if not item then return end
 
-	-- Mark only selected as Good
-	for _, itemData in items do
-		itemData.type = "Bad"
+	-- destroy instance
+	if item.instance and item.instance.Parent then
+		item.instance:Destroy()
 	end
-	items[idx].type = "Good"
 
-	-- Broadcast
-	self.ctx.broadcast("AutoAction", {
-		kind = "SetSpecialItem",
-		userId = userId,
-		itemIndex = idx,
+	table.remove(board.items, itemIndex)
+
+	-- Re-pack posIndex to 1..n and reposition
+	for i, c in ipairs(board.items) do
+		c.posIndex = i
+		local slotCF = board.positions[i]
+		if slotCF then
+			-- Lerp to new position
+			task.spawn(function()
+				local startCF = c.instance:GetPivot()
+				local duration = 0.3
+				local elapsed = 0
+				while elapsed < duration do
+					local alpha = elapsed / duration
+					local newCF = startCF:Lerp(slotCF, alpha)
+					c.instance:PivotTo(newCF)
+					task.wait()
+					elapsed += task.wait()
+				end
+				c.instance:PivotTo(slotCF)
+			end)
+		end
+	end
+
+	self.ctx.broadcast("BoardUpdate", {
+		boardUserId = boardUserId,
+		numItems = #board.items,
 	})
 end
 
-function Game:_autoSelectFor(player: Player)
-	local opponentUserId = self:GetOpponentUserId(player.UserId)
-	if not opponentUserId then return end
+function Game:_spawnBoardForPlayer(player: Player, seatIndex: number)
+	local tableInstance = self.ctx.tableInstance
+	local playerSlotsFolder = tableInstance:FindFirstChild("PlayerSlots") :: Folder?
+	local playerFolder = playerSlotsFolder and playerSlotsFolder:FindFirstChild("Player" .. tostring(seatIndex)) :: Folder?
+	assert(playerFolder, "Missing Player folder in table")
 
-	local opponentItems = self.gameState.userItems[opponentUserId]
-	if not opponentItems or #opponentItems == 0 then return end
+	local spawnPart = playerFolder:FindFirstChild("ItemSpawnPart") :: BasePart?
+	assert(spawnPart, "Missing ItemSpawnPart")
 
-	local idx = math.random(1, #opponentItems)
+	local itemsFolder = playerFolder:FindFirstChild("Items") :: Folder?
+	assert(itemsFolder, "Missing Items folder")
 
-	self.ctx.broadcast("AutoAction", {
-		kind = "SelectItem",
-		userId = player.UserId,
-		itemIndex = idx,
-	})
-
-	self:SelectItem(player, idx)
-end
-
-function Game:_spawnItemsForPlayer(player: Player, numItems: number, cf: CFrame, parent: Instance)
-	-- TODO: get the item skins from player data
-	local sampleModel = workspace.SampleItem
-
-	-- Clear old
-	if self.gameState.userItems[player.UserId] then
-		for _, itemData in self.gameState.userItems[player.UserId] do
-			itemData.instance:Destroy()
-		end
-		self.gameState.userItems[player.UserId] = {}
+	-- Clear folder
+	for _, child in ipairs(itemsFolder:GetChildren()) do
+		child:Destroy()
 	end
 
-	-- Spawn an arrangement of items
-	local spawnedItems = {}
+	local numItems = clampInt(self:_t("numItems", 6), 3, 10)
+	local spacing = self:_t("itemSpacing", 3)
+
+	local positions = {}
 	for i = 1, numItems do
-		local itemInstance = sampleModel:Clone() :: Model
-		itemInstance.Name = "Item_" .. tostring(i)
-		itemInstance:PivotTo(cf * CFrame.new(0, 0, (i - 1) * 3))
-		itemInstance.Parent = parent
-		table.insert(spawnedItems, { instance = itemInstance, position = i })
+		positions[i] = spawnPart.CFrame * CFrame.new(0, 0, (i - 1) * spacing)
 	end
-	self.gameState.userItems[player.UserId] = spawnedItems
+
+	local items = {}
+	for i = 1, numItems do
+		local m = SAMPLE_ITEM_MODEL:Clone()
+		m.Name = ("Item_%d"):format(i)
+		m.Parent = itemsFolder
+		m:PivotTo(positions[i])
+		table.insert(items, {
+			instance = m,
+			posIndex = i,
+			content = "Empty",
+		})
+	end
+
+	self.gameState.boards[player.UserId] = {
+		ownerUserId = player.UserId,
+		items = items,
+		positions = positions,
+		winningItemChosen = false,
+	} :: any
+	print("Spawned board for player ", player.Name)
 end
 
-function Game:_swapItemPositions(userId: number, idx1: number, idx2: number)
-	local items = self.gameState.userItems[userId]
-	if not items then
-		warn("No items found for player", userId)
-		return
-	end
-
-	local item1 = items[idx1]
-	local item2 = items[idx2]
-	if not item1 or not item2 then
-		warn("Invalid item indices for player", userId, idx1, idx2)
-		return
-	end
-
-	-- Swap positions
-	local tempPos = item1.position
-	item1.position = item2.position
-	item2.position = tempPos
-
-	-- Update instance positions (simple swap along Z axis for example)
-	local cf1 = item1.instance:GetPivot()
-	local cf2 = item2.instance:GetPivot()
-	item1.instance:PivotTo(cf2)
-	item2.instance:PivotTo(cf1)
-end
-
--- ========== Internal ========== --
-
+-- ===== Turn Tokens and Timeouts ===== --
 function Game:_nextTurnToken(): number
-	self._turnToken = (self._turnToken or 0) + 1
+	self._turnToken += 1
 	return self._turnToken
 end
 
 function Game:_armTurnTimeout(seconds: number, onTimeout: () -> ())
-	local token = self:_nextTurnToken()
-	task.delay(seconds, function()
-		-- if token changed, turn advanced or game destroyed
-		if self._turnToken ~= token then return end
+	local token = self._turnToken
+	task.spawn(function()
+		local remaining = seconds
+		while remaining > 0 do
+			task.wait(1)
+			remaining -= 1
+			if self._dead or self._turnToken ~= token then
+				return
+			end
+			if remaining <= 5 then
+				self.ctx.broadcast("TurnCountdown", { secondsLeft = remaining })
+			end
+		end
+		if self._dead or self._turnToken ~= token then return end
 		onTimeout()
 	end)
 end
@@ -549,20 +638,24 @@ function Game:Init()
 end
 
 function Game:Destroy()
-	-- // Clean up resources
-	for _, itemData in self.gameState.userItems do
-		for _, item in itemData do
-			item.instance:Destroy()
+	self._dead = true
+	self:_nextTurnToken()
+
+	-- Cleanup items
+	for _, board in pairs(self.gameState.boards) do
+		for _, item in ipairs(board.items) do
+			if item.instance and item.instance.Parent then
+				item.instance:Destroy()
+			end
 		end
 	end
-	table.clear(self.gameState.userItems)
+	table.clear(self.gameState.boards)
 
-	-- Disconnect all connections
-	for _, c in self._conns do
+	-- Disconnect conns
+	for _, c in ipairs(self._conns) do
 		pcall(function() c:Disconnect() end)
 	end
 	table.clear(self._conns)
-	_deps = nil
 end
 
 return Game :: GameAPI

@@ -11,7 +11,7 @@ local TweenService = game:GetService("TweenService")
 -- Map currencyIds to UI paths
 local LABEL_PATHS: {[string]: {string}} = {
 	Cash = { "Frame", "CashContainer", "CashAmount" },
-	Kills = { "Frame", "KillsContainer", "KillsAmount" },
+	Kills = { "Frame", "WinsContainer", "WinsAmount" },
 	-- Add more currencies here as needed
 }
 
