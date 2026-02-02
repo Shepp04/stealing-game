@@ -6,6 +6,8 @@ export type GameBroadcastState =
 	| "RoundEnd"
 	| "Players"
 	| "Camera"
+	| "ClearMessages"
+	| "Message"       -- generic heading/subheading (payload: heading?: string, subheading?: string)
 	| "Turn"
 	| "TurnCountdown"
 	| "YourResult"
@@ -16,9 +18,10 @@ export type GameBroadcastState =
 	| "BoardUpdate"   -- a cup got removed / board shrank
 
 export type GameAction =
-	"SetLunch"      -- players choose where they hid lunch (setup)
-	| "SelectCup"   -- chooser picks a cup (gameplay)
-	| "ShuffleInput" -- OPTIONAL later for manual swap UX (keep open)
+	"SetWinningItem"      -- players choose where they hid lunch (setup)
+	| "SelectItem"   -- chooser picks a cup (gameplay)
+	| "StartShuffle"
+	| "StopShuffle"
 
 export type TurnType = "Setup" | "Shuffle" | "Choose"
 export type ItemContent = "Win" | "Lose" | "Empty"

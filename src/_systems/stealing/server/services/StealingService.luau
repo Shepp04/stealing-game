@@ -2,9 +2,13 @@
 -- StealingService (Service) — lifecycle-first singleton discovered by Services registry.
 
 -- // Roblox Services
+local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
+
+-- // Utils
+local StealingUtils = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Utils"):WaitForChild("Stealing"))
 
 -- // Types (generated)
 local ServicesTypes = require(ReplicatedStorage.Shared.Types.Services)
@@ -38,6 +42,13 @@ export type StealingServiceAPI = {
 	Init: (self: StealingServiceAPI, deps: Deps) -> (),
 	Start: (self: StealingServiceAPI) -> (),
 	Destroy: (self: StealingServiceAPI) -> (),
+
+	GetPlayerHeldItemId: (self: StealingServiceAPI, player: Player) -> string?,
+	GetHeldItemIdFromTier: (self: StealingServiceAPI, tier: number) -> string?,
+	GetPlayerTier: (self: StealingServiceAPI, player: Player) -> number,
+	SetPlayerHeldItemId: (self: StealingServiceAPI, player: Player,	itemId: string?) -> (),
+	PerformExchange: (self: StealingServiceAPI, winner: Player, loser: Player) -> (),
+	SelfUpgrade: (self: StealingServiceAPI, player: Player) -> boolean,
 }
 
 local StealingService = {
@@ -52,105 +63,365 @@ local StealingService = {
 local _deps: Deps?
 
 -- // Assets
-local Assets = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Assets")
-local SAMPLE_TIER_GUI = Assets:WaitForChild("UI"):WaitForChild("TierGui")
+local STEALABLE_ITEM_MODELS_FOLDER = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Models"):WaitForChild("StealableItems") :: Folder
+local SAMPLE_TIER_GUI = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Assets"):WaitForChild("UI"):WaitForChild("Itemtag") :: BillboardGui
 
 -- ========== Public API ========== --
 
-function StealingService:GetPlayerTier(player: Player): number?
-	local profile = _deps.DataInterface:GetPlayerProfile(player)
+-- ===== Getters and Setters ===== --
+function StealingService:GetPlayerHeldItemId(player: Player, yield: boolean?): string?
+	local profile = _deps.DataInterface:GetPlayerProfile(player, yield)
 	if not profile then return nil end
-
-	local stealingData = profile.Data.Stealing
-	return stealingData.currentTier
+	
+	return profile.Data and profile.Data.Stealing and profile.Data.Stealing.heldItemId or nil
 end
 
-function StealingService:SetPlayerTier(player: Player, tier: number)
+function StealingService:GetHeldItemIdFromTier(tier: number): string?
+	if not _deps then return nil end
+
+	local items = _deps.GameData.GetDataType("StealableItem").items
+	local itemsByTier = StealingUtils.getStealableItemsByTier(items)
+	if not itemsByTier then return nil end
+
+	local itemInfo = itemsByTier[tier]
+	return itemInfo and itemInfo.id or nil
+end
+
+function StealingService:GetPlayerTier(player: Player): number
+	-- Get their held item
+	local heldItemId = self:GetPlayerHeldItemId(player)
+	if not heldItemId then return 0 end
+
+	-- Get the tier from the held item
+	local itemInfo = _deps.GameData.Get("StealableItem", heldItemId)
+	if not itemInfo then return 0 end
+
+	return itemInfo.tier
+end
+
+function StealingService:SetPlayerHeldItemId(player: Player, itemId: string?)
 	local profile = _deps.DataInterface:GetPlayerProfile(player)
-	if not profile then return end
+	if not profile or not profile.Data or not profile.Data.Stealing then return end
 
-	local stealingData = profile.Data.Stealing
-	stealingData.currentTier = tier
+	profile.Data.Stealing.heldItemId = itemId
 
-	if tier > 0 then
-		print("[StealingService] Set player", player.UserId, "to tier", tier)
-	else
-		print("[StealingService]", player.UserId, " lost their tier!")
+	if profile.Data.Stealing.seenItems == nil then
+		profile.Data.Stealing.seenItems = {}
 	end
 
-	-- Update the player's overhead Gui
-	self:UpdatePlayerTierGui(player)
-end
-
-function StealingService:ExchangeTiers(winner: Player, loser: Player)
-	-- Get both player's tiers
-	local winnerTier = self:GetPlayerTier(winner) or 0
-	local loserTier = self:GetPlayerTier(loser) or 0
-
-	-- Exchange tiers
-	if winnerTier < loserTier then
-		-- Only exchange if winner has lower tier than loser
-		self:SetPlayerTier(winner, loserTier)
-	elseif winnerTier == loserTier then
-		-- If tiers are equal, increment winner's tier by 1
-		self:SetPlayerTier(winner, winnerTier + 1)
-	else
-		-- Winner already has higher tier, give cash reward instead
+	-- Register as seen (if itemId not nil, and not already seen)
+	if itemId then
+		if not profile.Data.Stealing.seenItems[itemId] then
+			profile.Data.Stealing.seenItems[itemId] = {
+				firstSeenAt = os.time(),
+				timesSeen = 0,
+			}
+		end
+		-- Increment times seen
+		profile.Data.Stealing.seenItems[itemId].timesSeen += 1
 	end
 
-	-- Reset the loser's tier to 0
-	self:SetPlayerTier(loser, 0)
+	-- Notify about held item change
+	self:_onHeldItemChanged(player, itemId)
 end
 
-function StealingService:UpdatePlayerTierGui(player: Player)
-	local tier = self:GetPlayerTier(player) or 0
+-- ===== Overhead Displays ===== --
+
+function StealingService:RefreshHeldItemCharacterDisplay(player: Player)
 	local char = player.Character
-	local gui = char and char:FindFirstChild("_CurrentTier") :: BillboardGui?
-	if gui then
-		local frame = gui:FindFirstChild("Frame") :: Frame?
-		local tierLabel = frame and frame:FindFirstChild("CurrentTier") :: TextLabel?
-		if tierLabel then
-			if tier > 0 then
-				tierLabel.Text = tostring(tier)
-			else
-				tierLabel.Text = "0"
+	local head = char and char:FindFirstChild("Head")
+	if not head then return end
+
+	-- == Clear current == --
+	-- Clear display model
+	local existingDisplay = char:FindFirstChild("_StealableItemDisplay")
+	if existingDisplay then
+		existingDisplay:Destroy()
+	end
+	-- Clear overhead gui
+	local existingGui = char:FindFirstChild("_StealableItemDisplayGui")
+	if existingGui then
+		existingGui:Destroy()
+	end
+
+	-- Get their held item
+	local heldItemId = self:GetPlayerHeldItemId(player, true)
+	if not heldItemId or not _deps.GameData.Get("StealableItem", heldItemId) then
+		return
+	end
+
+	local heldItemInfo = _deps.GameData.Get("StealableItem", heldItemId) :: any
+
+	-- // Overhead Gui implementation
+	local gui = char:FindFirstChild("_StealableItemDisplayGui") :: BillboardGui?
+	if not gui then
+		gui = SAMPLE_TIER_GUI:Clone() :: BillboardGui
+		gui.Name = "_StealableItemDisplayGui"
+		gui.Adornee = head
+		gui.Parent = char
+	end
+
+	gui.Frame.ItemName.Text = heldItemInfo.name .. " (" .. heldItemInfo.tier .. ")"
+	if heldItemInfo.textData then
+		gui.Frame.ItemName.TextColor3 = heldItemInfo.textData.primaryColor or Color3.fromRGB(255, 255, 255)
+	end
+
+	-- // Physical model implementation
+	local model: Model
+	local curInstance = STEALABLE_ITEM_MODELS_FOLDER
+	for _, loc in pairs(heldItemInfo.modelPath or {}) do
+		curInstance = curInstance:FindFirstChild(loc)
+		if not curInstance then
+			warn("[StealingService] Could not find model part at path:", table.concat(heldItemInfo.modelPath or {}, " -> "))
+			return
+		end
+	end
+
+	local yOffset = 2.5
+
+	model = curInstance:Clone() :: Model
+	model.Name = "_StealableItemDisplay"
+	model:PivotTo(head.CFrame * CFrame.new(0, yOffset, 0))
+
+	-- Update collisions and physics
+	for _, d in model:GetDescendants() do
+		if d:IsA("BasePart") then
+			d.CanCollide = false
+			d.Anchored = false
+			d.Massless = true
+		end
+	end
+
+	-- Create an attachment to align to head
+	local headAttach = head:FindFirstChild("_StealableItemDisplayAttach") :: Attachment?
+	if not headAttach then
+		headAttach = Instance.new("Attachment")
+		headAttach.Name = "_StealableItemDisplayAttach"
+		headAttach.Position = Vector3.new(0, yOffset, 0)
+		headAttach.Parent = head
+	end
+
+	local modelAttach = Instance.new("Attachment")
+	modelAttach.Name = "StealableItemModelAttach"
+	modelAttach.Parent = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+
+	local alignPosition = Instance.new("AlignPosition")
+	alignPosition.Attachment0 = modelAttach
+	alignPosition.Attachment1 = headAttach
+	alignPosition.RigidityEnabled = false
+	alignPosition.ReactionForceEnabled = true
+	alignPosition.ApplyAtCenterOfMass = true
+	alignPosition.Responsiveness = 50
+	alignPosition.Parent = model
+
+	local alignOrientation = Instance.new("AlignOrientation")
+	alignOrientation.Attachment0 = modelAttach
+	alignOrientation.Attachment1 = headAttach
+	alignOrientation.RigidityEnabled = false
+	alignOrientation.Parent = model
+
+	model.Parent = char
+end
+
+-- ===== Tools ===== --
+
+function StealingService:RefreshHeldItemTool(player: Player)
+	-- == Clear current == --
+	-- Remove tool from player
+	local backpack = player:FindFirstChild("Backpack")
+	if backpack then
+		for _, v in backpack:GetChildren() do
+			if CollectionService:HasTag(v, "_StealableItemTool") then
+				v:Destroy()
 			end
 		end
 	end
+			
+	local char = player.Character
+	if char then
+		for _, v in char:GetChildren() do
+			if CollectionService:HasTag(v, "_StealableItemTool") then
+				v:Destroy()
+			end
+		end
+	end
+	
+	local heldItemId = self:GetPlayerHeldItemId(player, true)
+	if not heldItemId then
+		return
+	end
+
+	-- Get item info
+	local heldItemInfo = _deps.GameData.Get("StealableItem", heldItemId)
+	if not heldItemInfo then
+		warn("[StealingService] Invalid heldItemId passed to GiveItemTool:", heldItemId)
+		return
+	end
+
+	-- Create tool
+	local tool = Instance.new("Tool")
+	tool.Name = heldItemInfo.name
+	CollectionService:AddTag(tool, "_StealableItemTool")
+
+	local model: Model
+	local curInstance = STEALABLE_ITEM_MODELS_FOLDER
+	for _, loc in pairs(heldItemInfo.modelPath or {}) do
+		curInstance = curInstance:FindFirstChild(loc)
+		if not curInstance then
+			warn("[StealingService] Could not find model part at path:", table.concat(heldItemInfo.modelPath or {}, " -> "))
+			return
+		end
+	end
+
+	model = curInstance:Clone() :: Model
+	model.Parent = tool
+
+	-- Create handle
+	local handle = Instance.new("Part")
+	handle.Name = "Handle"
+	handle.Size = Vector3.new(1, 1, 1)
+	handle.CFrame = model:GetPivot()
+	handle.Transparency = 1
+	handle.CanCollide = false
+	handle.Parent = tool
+
+	for _, d in model:GetDescendants() do
+		if d:IsA("BasePart") then
+			d.CanCollide = false
+			d.Anchored = false
+			d.Massless = true
+
+			local weld = Instance.new("WeldConstraint")
+			weld.Part0 = d
+			weld.Part1 = handle
+			weld.Parent = d
+		end
+	end
+
+	tool.Parent = player:WaitForChild("Backpack")
+end
+
+-- ===== Game Logic ===== --
+
+function StealingService:PerformExchange(winner: Player, loser: Player)
+	-- Get winner and loser tiers
+	local winnerTier = self:GetPlayerTier(winner)
+	local loserTier = self:GetPlayerTier(loser)
+
+	-- ItemIds to send to client display
+	local winnerOldHeldItemId: string = self:GetPlayerHeldItemId(winner)
+	local winnerNewHeldItemId: string = winnerOldHeldItemId -- set to old as default
+	local loserOldHeldItemId: string = self:GetPlayerHeldItemId(loser)
+	local loserNewHeldItemId: string = loserOldHeldItemId -- set to old as default
+
+	-- Winner logic
+	if winnerTier < loserTier then
+		-- Winner gets loser's item
+		local loserItemId = self:GetPlayerHeldItemId(loser)
+		self:SetPlayerHeldItemId(winner, loserItemId)
+		winnerNewHeldItemId = loserItemId
+	elseif winnerTier == loserTier then
+		-- Winner gets next tier item (if exists)
+		local targetTier = winnerTier + 1
+		local itemId = self:GetHeldItemIdFromTier(targetTier)
+		if itemId then
+			self:SetPlayerHeldItemId(winner, itemId)
+			winnerNewHeldItemId = itemId
+		else
+			-- No higher tier item, do nothing or give reward
+			warn("[StealingService] No higher tier item for tier:", targetTier)
+		end
+	else
+		-- Winner already has higher tier, do nothing or give reward
+		warn("[StealingService] Winner already has higher tier:", winnerTier, "vs loser tier:", loserTier)
+	end
+
+	-- Loser logic: reset to initial item
+	local baseHeldItemId = self:GetHeldItemIdFromTier(0)
+	self:SetPlayerHeldItemId(loser, baseHeldItemId)
+	loserNewHeldItemId = baseHeldItemId
+
+	-- Display info on the clients
+	self._stealResultRemote:FireClient(winner, {
+		opponentUserId = loser.UserId,
+		success = true,
+		opponentOldHeldItemId = loserOldHeldItemId,
+		opponentNewHeldItemId = loserNewHeldItemId,
+		oldHeldItemId = winnerOldHeldItemId,
+		newHeldItemId = winnerNewHeldItemId,
+	})
+	self._stealResultRemote:FireClient(loser, {
+		opponentUserId = winner.UserId,
+		success = false,
+		opponentOldHeldItemId = winnerOldHeldItemId,
+		opponentNewHeldItemId = winnerNewHeldItemId,
+		oldHeldItemId = loserOldHeldItemId,
+		newHeldItemId = loserNewHeldItemId,
+	})
+end
+
+function StealingService:SelfUpgrade(player: Player): boolean
+	-- Get player's current tier
+	local currentTier = self:GetPlayerTier(player)
+
+	-- Determine next tier item
+	local targetTier = currentTier + 1
+	local itemId = self:GetHeldItemIdFromTier(targetTier)
+	if not itemId then
+		-- No higher tier item
+		return false
+	end
+
+	-- Get item info
+	local itemInfo = _deps.GameData.Get("StealableItem", itemId)
+	if not itemInfo or not itemInfo.currencyData then
+		warn("[StealingService] Invalid item info or missing currency data for itemId:", itemId)
+		return false
+	end
+
+	-- Check if player can afford
+	local canAfford = self.Services.CurrencyService:CanAfford(player, itemInfo.currencyData.buyCurrencyId, itemInfo.currencyData.buyPrice, true)
+	if not canAfford then
+		return false
+	end
+
+	-- Spend currency
+	local success = self.Services.CurrencyService:SpendCurrency(player, itemInfo.currencyData.buyCurrencyId, itemInfo.currencyData.buyPrice)
+	if not success then
+		return false
+	end
+
+	-- Set player's held item to next tier item
+	self:SetPlayerHeldItemId(player, itemId)
+	return true
+end
+
+-- ========== Internal ========== --
+
+function StealingService:_onHeldItemChanged(player: Player, newItemId: string?)
+	-- Signal to nametag system etc. to display above player's head
+	self:RefreshHeldItemCharacterDisplay(player)
+	self:RefreshHeldItemTool(player, newItemId)
 end
 
 -- ========== Player Life Cycle ========== --
 
-function StealingService:OnCharacterAdded(player: Player, char: Model)
-	-- Create or update the overhead Gui
-	local gui = char:FindFirstChild("_CurrentTier") :: BillboardGui?
-	if not gui then
-		gui = SAMPLE_TIER_GUI:Clone()
-		gui.Name = "_CurrentTier"
-		gui.Adornee = char:FindFirstChild("Head") :: BasePart
-		gui.Parent = char
-	end
-	self:UpdatePlayerTierGui(player)
+function StealingService:_onCharacterAdded(player: Player, char: Model)
+	local head = char:WaitForChild("Head") :: BasePart
+	local human = char:WaitForChild("Humanoid") :: Humanoid
+	local root = char:WaitForChild("HumanoidRootPart") :: BasePart
+
+	self:RefreshHeldItemCharacterDisplay(player)
+	self:RefreshHeldItemTool(player)
 end
 
-function StealingService:OnPlayerAdded(player: Player)
-	self._playerConns = self._playerConns or {}
-	self._playerConns[player.UserId] = {}
-
+function StealingService:_onPlayerAdded(player: Player)
 	local char = player.Character or player.CharacterAdded:Wait()
-	self:OnCharacterAdded(player, char)
-	table.insert(self._playerConns[player.UserId], player.CharacterAdded:Connect(function(character: Model)
-		self:OnCharacterAdded(player, character)
-	end))
-end
+	self:_onCharacterAdded(player, char)
 
-function StealingService:OnPlayerRemoving(player: Player)
-	if self._playerConns and self._playerConns[player.UserId] then
-		for _, conn in self._playerConns[player.UserId] do
-			pcall(function() conn:Disconnect() end)
-		end
-		self._playerConns[player.UserId] = nil
-	end
+	player.CharacterAdded:Connect(function(character)
+		self:_onCharacterAdded(player, character)
+	end)
 end
 
 -- ========== Life Cycle ========== --
@@ -161,28 +432,46 @@ function StealingService:Init(deps: Deps)
 	self._conns = {}
 	_deps = deps
 
-	-- // Example: get/create remotes
+	-- // Create remotes
+	self._stealResultRemote = _deps.SharedPackages.Remotes:GetRemote("RemoteEvent", "StealResult") :: RemoveEvent
+	self._selfUpgradeHeldItemRemote = _deps.SharedPackages.Remotes:GetRemote("RemoteEvent", "SelfUpgradeHeldItem") :: RemoteEvent
+
+	-- // Register reconcile section
+	local defaultHeldItemId = "bread" :: string?
+	if not _deps.GameData.Get("StealableItem", defaultHeldItemId) then
+		defaultHeldItemId = nil
+	end
+	self.Services.DataInterface:RegisterReconcileSection("Data", "Stealing", {
+		heldItemId = defaultHeldItemId,
+		seenItems = {} :: { [string]: {
+			firstSeenAt: number,
+			timesSeen: number,
+		} },
+	})
 end
 
 function StealingService:Start()
 	if not self._inited or self._started then return end
 	self._started = true
 
-	-- // Register reconcile section
-	_deps.DataInterface:RegisterReconcileSection("Data", "Stealing", {
-		currentTier = nil :: number?,
-	})
-
-	-- // Connect player life cycle
+	-- // Example: connect remotes, start loops, etc.
 	for _, plr in Players:GetPlayers() do
-		self:OnPlayerAdded(plr)
+		self:_onPlayerAdded(plr)
 	end
+
 	table.insert(self._conns, Players.PlayerAdded:Connect(function(player: Player)
-		self:OnPlayerAdded(player)
+		self:_onPlayerAdded(player)
 	end))
 
-	table.insert(self._conns, Players.PlayerRemoving:Connect(function(player: Player)
-		self:OnPlayerRemoving(player)
+	local selfUpgradeDebounce = {} :: { [Player]: true }
+	table.insert(self._conns, self._selfUpgradeHeldItemRemote.OnServerEvent:Connect(function(player: Player)
+		if selfUpgradeDebounce[player] then return end
+		selfUpgradeDebounce[player] = true
+		task.delay(0.50, function()
+			selfUpgradeDebounce[player] = nil
+		end)
+
+		self:SelfUpgrade(player)
 	end))
 end
 

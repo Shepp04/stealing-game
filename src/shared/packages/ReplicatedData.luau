@@ -11,6 +11,7 @@ local DataRemoteEvent : RemoteEvent
 -- // Constants
 local DEBUG_CATEGORIES -- Categories that will print on update (for debugging)
 	= {}
+local PRINT_ON_FIRST_LOAD: boolean = false -- Print data when first received
 
 -- // Module // --
 local ReplicatedData = {}
@@ -170,7 +171,9 @@ else
 	
 	DataRemoteEvent.OnClientEvent:Connect(function(category, data)
 		if not received_categories[category] then
-			task.delay(1.5, print, "Data recieved: Category =", category, " Data =", data)
+			if PRINT_ON_FIRST_LOAD then
+				task.delay(1.5, print, "Data recieved: Category =", category, " Data =", data)
+			end
 		elseif table.find(DEBUG_CATEGORIES, category) then
 			print("Data recieved: Category =", category, " Data =", data)
 		end

@@ -4,12 +4,15 @@
 -- // Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
+local StarterGui = game:GetService("StarterGui")
 local TweenService = game:GetService("TweenService")
 
 -- // Utils
 local GuiRefs = require(script.Parent.Parent.Utils.GuiRefs)
 
 -- // Custom types
+local GameTypes = require(ReplicatedStorage.Shared.Types:WaitForChild("Game"))
+type ItemContent = GameTypes.ItemContent
 
 -- // Type aliases for deps inferred from real modules
 type ReplicatedData = typeof(require(ReplicatedStorage.Shared.Packages.ReplicatedData))
@@ -40,6 +43,7 @@ export type GameHUDAPI = {
 	SetSubheading: (self: GameHUDAPI, text: string?) -> (),
 	SetPlayerNames: (self: GameHUDAPI, player1Name: string?, player2Name: string?) -> (),
 	SetPlayerLives: (self: GameHUDAPI, player1Lives: number, player2Lives: number) -> (),
+	RevealItemMask: (self: GameHUDAPI, itemModel: Model, contentType: ItemContent, duration: number) -> (),
 	SetVisible: (self: GameHUDAPI, visible: boolean) -> (),
 }
 
@@ -78,6 +82,9 @@ function GameHUD.new(deps: Deps, opts: Opts): GameHUDAPI
 	self._player2NameLabel = opts.player2NameLabel
 	self._player1Lives = opts.player1Lives
 	self._player2Lives = opts.player2Lives
+
+	self._currentHeadingToken = 0
+	self._currentSubheadingToken = 0
 
 	return self
 end
@@ -171,20 +178,41 @@ function GameHUD:ToggleExternalPlayerVisibility(state: boolean, ignoreUserIds: {
 	end
 end
 
-function GameHUD:SetHeading(text: string?)
+function GameHUD:SetHeading(text: string?, color: Color3?, duration: number?)
+	self._currentHeadingToken = (self._currentHeadingToken or 0) + 1
+
 	if text then
 		self._headingTextLabel.Text = text
+		self._headingTextLabel.TextColor3 = color or Color3.new(1, 1, 1)
 		self._headingTextLabel.Visible = true
+
+		-- Clear after duration
+		local currentToken = self._currentHeadingToken
+		task.delay(duration or 2.0, function()
+			if currentToken == self._currentHeadingToken then
+				self:SetHeading(nil)
+			end
+		end)
 	else
 		self._headingTextLabel.Text = ""
 		self._headingTextLabel.Visible = false
 	end
 end
 
-function GameHUD:SetSubheading(text: string?)
+function GameHUD:SetSubheading(text: string?, color: Color3?, duration: number?)
+	self._currentSubheadingToken = (self._currentSubheadingToken or 0) + 1
 	if text then
 		self._subheadingTextLabel.Text = text
+		self._subheadingTextLabel.TextColor3 = color or Color3.new(1, 1, 1)
 		self._subheadingTextLabel.Visible = true
+
+		-- Clear after duration
+		local currentToken = self._currentSubheadingToken
+		task.delay(duration or 3.0, function()
+			if currentToken == self._currentSubheadingToken then
+				self:SetSubheading(nil)
+			end
+		end)
 	else
 		self._subheadingTextLabel.Text = ""
 		self._subheadingTextLabel.Visible = false
@@ -244,14 +272,47 @@ function GameHUD:SetPlayerLives(player1Lives: number, player2Lives: number, maxL
 	end
 end
 
+function GameHUD:RevealItemMask(itemModel: Model, contentType: ItemContent, duration: number)
+	-- Create a highlight object
+	local highlight = Instance.new("Highlight")
+	highlight.Adornee = itemModel
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+
+	if contentType == "Win" or contentType == "Empty" then
+		highlight.FillColor = Color3.fromRGB(0, 255, 0) -- Green
+		highlight.OutlineColor = Color3.fromRGB(0, 200, 0)
+	elseif contentType == "Lose" then
+		highlight.FillColor = Color3.fromRGB(255, 0, 0) -- Red
+		highlight.OutlineColor = Color3.fromRGB(200, 0, 0)
+	else
+		highlight.FillColor = Color3.fromRGB(255, 255, 0) -- Yellow
+		highlight.OutlineColor = Color3.fromRGB(200, 200, 0)
+	end
+
+	highlight.FillTransparency = 1
+	highlight.OutlineTransparency = 1
+	highlight.Parent = itemModel
+
+	-- Tween in the highlight
+	TweenService:Create(highlight, TweenInfo.new(0.5), { FillTransparency = 0, OutlineTransparency = 0 }):Play()
+	task.wait(duration or 1.0)
+
+	-- Tween out the highlight
+	local tween = TweenService:Create(highlight, TweenInfo.new(0.5), { FillTransparency = 1, OutlineTransparency = 1 })
+	tween:Play()
+	tween.Completed:Wait()
+	highlight:Destroy()
+end
+
 function GameHUD:SetVisible(visible: boolean)
 	self._root.Enabled = visible
+	self:_toggleBackpack(not visible)
 end
 
 -- ========== Internal ========== --
 
-function GameHUD:_internalMethod()
-	-- Example
+function GameHUD:_toggleBackpack(state: boolean)
+	StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Backpack, state)
 end
 
 -- ========== Life Cycle ========== --

@@ -8,7 +8,7 @@
 export type UX = {
 	_inited: boolean,
 	_started: boolean,
-	_modules: { [string]: any },
+	_modules: { [string]: { name: string, module: any } },
 	
 	Init: (self: UX) -> (),
 	Start: (self: UX) -> (),
@@ -28,9 +28,10 @@ function UX:Init()
 		if moduleScript:IsA("ModuleScript") then
 			local ok, result = pcall(require, moduleScript)
 			if ok then
-				self._modules[moduleScript.Name] = result
+				self._modules[moduleScript.Name] = { name = moduleScript.Name, module = result }
+				-- print(`[UI-UX] Loaded '{moduleScript.Name}' module`)
 			else
-				warn(`[AnimatedElements] Failed to load '{moduleScript.Name}': {result}`)
+				warn(`[UI-UX] Failed to load '{moduleScript.Name}': {result}`)
 			end
 		end
 	end
@@ -41,9 +42,14 @@ function UX:Start()
 	if not self._inited or self._started then return end
 	self._started = true
 	
-	for _, module in self._modules do
-		if module.Init then
-			module:Init()
+	for _, moduleWrapper in self._modules do
+		if moduleWrapper.module.Init then
+			local ok, err = pcall(function() moduleWrapper.module:Init() end)
+			if not ok then
+				warn(`[UX] Failed to start module {moduleWrapper.name}: {err}`)
+			else
+				-- print(`[UX] Started module {moduleWrapper.name}`)
+			end
 		end
 	end
 end
@@ -53,9 +59,9 @@ function UX:Destroy()
 	self._inited = false
 	self._started = false
 	
-	for _, module in self._modules do
-		if module.Destroy then
-			module:Destroy()
+	for _, moduleWrapper in self._modules do
+		if moduleWrapper.module.Destroy then
+			moduleWrapper.module:Destroy()
 		end
 	end
 end

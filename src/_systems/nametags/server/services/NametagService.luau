@@ -40,6 +40,9 @@ local NametagService = {
 -- // Private State
 local _deps: Deps?
 
+-- // Constants
+local USE_FLAGS = false
+
 -- ========== Public API ========== --
 function NametagService:Update(player: Player, char: Model?)
     -- Use the provided character model or Find the player's character
@@ -59,12 +62,14 @@ function NametagService:Update(player: Player, char: Model?)
         local nameText = player.DisplayName
 
         -- Add country flag if available
-        local SocialUtilModule = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Utils"):FindFirstChild("Social")
-        if SocialUtilModule then
-            local SocialUtil = require(SocialUtilModule)
-            local _, _, countryFlag = SocialUtil.GetCountryCodeNameAndFlagForPlayer(player)
-            if countryFlag then
-                nameText = countryFlag .. " " .. nameText
+        if USE_FLAGS then
+            local SocialUtilModule = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Utils"):FindFirstChild("Social")
+            if SocialUtilModule then
+                local SocialUtil = require(SocialUtilModule)
+                local _, _, countryFlag = SocialUtil.GetCountryCodeNameAndFlagForPlayer(player)
+                if countryFlag then
+                    nameText = countryFlag .. " " .. nameText
+                end
             end
         end
 

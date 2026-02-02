@@ -45,10 +45,11 @@ local _ordered: { Service } = {}
 local function _loadAll()
     for _, child in ipairs(ServicesFolder:GetChildren()) do
         if child:IsA("ModuleScript") then
-            local ok, mod = pcall(require, child)
+            local mod = require(child)
+            --[[local ok, mod = pcall(require, child)
             if not ok then
                 error(("[Services] Failed to require %s: %s"):format(child:GetFullName(), tostring(mod)))
-            end
+            end--]]
             if type(mod) ~= "table" then
                 error(("[Services] %s did not return a table"):format(child.Name))
             end

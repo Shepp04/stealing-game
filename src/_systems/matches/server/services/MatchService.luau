@@ -59,6 +59,30 @@ local MatchService = {
 -- Private captured deps for intellisense-friendly access
 local _deps: Deps?
 
+-- ========== Callbacks ========== --
+
+-- Callback injected into MatchTable to run on match end
+local function _onMatchEnd(players: { Player }, winner: Player?)
+	if not _deps then return end
+
+	local stealingService = _deps.Services.StealingService
+	if not stealingService then warn("StealingService not available") return end
+
+	-- Perform stealing exchange
+	if not winner then return end
+
+	-- Find the loser (only 1 for now)
+	local loser = nil
+	for _, plr in players do
+		if plr ~= winner then
+			loser = plr
+			break
+		end
+	end
+	if not loser then return end
+	stealingService:PerformExchange(winner, loser)
+end
+
 -- ========== Public API ========== --
 
 function MatchService:LeaveMatch(player: Player)
@@ -114,17 +138,10 @@ function MatchService:Init(deps: Deps)
 			gameClass = GameClass,
 			minPlayers = 2,
 			maxPlayers = 2,
+			onMatchEnd = _onMatchEnd,
 		})
 		table.insert(self._matchTables, object)
 	end
-
-	CollectionService:GetInstanceRemovedSignal("MatchTable"):Connect(function(model)
-		local t = MatchTable.ActiveTables[model]
-		if t then
-			t:Destroy()
-			MatchTable.ActiveTables[model] = nil
-		end
-	end)
 end
 
 function MatchService:Start()
@@ -143,6 +160,26 @@ function MatchService:Start()
 	for _, matchTable in self._matchTables do
 		matchTable:Init()
 	end
+
+	-- // Handle creation/destruction of match tables
+	table.insert(self._conns, CollectionService:GetInstanceAddedSignal("MatchTable"):Connect(function(model)
+		local object = MatchTable.new(_deps, {
+			tableInstance = model,
+			gameClass = GameClass,
+			minPlayers = 2,
+			maxPlayers = 2,
+			onMatchEnd = _onMatchEnd,
+		})
+		object:Init()
+	end))
+	
+	table.insert(self._conns, CollectionService:GetInstanceRemovedSignal("MatchTable"):Connect(function(model)
+		local t = MatchTable.ActiveTables[model]
+		if t then
+			t:Destroy()
+			MatchTable.ActiveTables[model] = nil
+		end
+	end))
 
 	-- // Connect player lifecycle
 	for _, plr in Players:GetPlayers() do

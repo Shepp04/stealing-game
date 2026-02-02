@@ -37,8 +37,14 @@ local API: ControllersAPI = {
 
 -- ========== Internal ========== --
 
+-- Wrapper type for ordered list
+type ModuleWrapper = {
+	name: string,
+	module: Controller,
+}
+
 -- sorted list for lifecycle calls
-local _ordered: { Controller } = {}
+local _ordered: { ModuleWrapper } = {}
 
 -- Discover and require all ModuleScripts directly under this folder
 local function _loadAll()
@@ -59,16 +65,16 @@ end
 -- Build deterministic order by priority, with lowest first
 local function _rebuildOrder()
 	_ordered = {}
-	for _, c in pairs(API._registry) do
-		table.insert(_ordered, c);
+	for name, c in pairs(API._registry) do
+		table.insert(_ordered, { name = name, module = c });
 		-- give each controller a backref (like Services)
 		(c :: any).Controllers = API._registry
 	end
 	table.sort(_ordered, function(a, b)
-		local pa = a.Priority or 100
-		local pb = b.Priority or 100
+		local pa = a.module.Priority or 100
+		local pb = b.module.Priority or 100
 		if pa == pb then
-			return tostring(a) < tostring(b)
+			return a.name < b.name
 		end
 		return pa < pb
 	end)
@@ -91,10 +97,11 @@ function API.InitAll(extraDeps: any?)
 	
 	_rebuildOrder()
 
-	for _, c in ipairs(_ordered) do
-		if typeof((c :: any).Init) == "function" then
-			(c :: any):Init(deps)
+	for _, wrapper in ipairs(_ordered) do
+		if typeof(wrapper.module.Init) == "function" then
+			wrapper.module:Init(deps)
 		end
+		-- print("[Controllers] Inited", wrapper.name)
 	end
 
 	API._inited = true
@@ -106,10 +113,11 @@ end
 ]]
 function API.StartAll()
 	if not API._inited or API._started then return end
-	for _, c in ipairs(_ordered) do
-		if typeof((c :: any).Start) == "function" then
-			(c :: any):Start()
+	for _, wrapper in ipairs(_ordered) do
+		if typeof(wrapper.module.Start) == "function" then
+			wrapper.module:Start()
 		end
+		-- print("[Controllers] Started", wrapper.name)
 	end
 	API._started = true
 end
@@ -120,9 +128,9 @@ end
 ]]
 function API.DestroyAll()
 	for i = #_ordered, 1, -1 do
-		local c = _ordered[i]
-		if typeof((c :: any).Destroy) == "function" then
-			pcall(function() (c :: any):Destroy() end)
+		local wrapper = _ordered[i]
+		if typeof(wrapper.module.Destroy) == "function" then
+			pcall(function() wrapper.module:Destroy() end)
 		end
 	end
 	API._started = false

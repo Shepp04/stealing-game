@@ -12,6 +12,7 @@ local GuiRefs = require(script.Parent.Parent.Utils:WaitForChild("GuiRefs"))
 -- // Components
 local GameHUD = require(script.Parent.Parent.Components:WaitForChild("GameHUD"))
 local GameCamera = require(script.Parent.Parent.Components:WaitForChild("GameCamera"))
+local GameInput = require(script.Parent.Parent.Components:WaitForChild("GameInput"))
 
 -- // Types (custom)
 local GameTypes = require(ReplicatedStorage.Shared.Types.Game)
@@ -73,7 +74,8 @@ function MatchController:HandleGameStateUpdate(kind: GameBroadcastState, ...: an
 
 	-- ===== Match State =====
 	if kind == "MatchBegin" then
-		self:StartMatch()
+		local tableInstance: Model? = (... and (...).tableInstance) or nil
+		self:StartMatch(tableInstance)
 		return
 	end
 
@@ -82,17 +84,20 @@ function MatchController:HandleGameStateUpdate(kind: GameBroadcastState, ...: an
 		local winnerCameraCFrame: BasePart? = (... and (...).winnerCameraCFrame) or nil
 		
 		if winnerUserId == 0 then
-			self._gameHUD:SetHeading("Match ended")
+			self._gameHUD:SetHeading("Match ended", Color3.fromRGB(255, 255, 255))
 		elseif winnerUserId == Players.LocalPlayer.UserId then
 			self._gameCamera:Focus(winnerCameraCFrame or CFrame.new(), nil, true)
-			self._gameHUD:SetHeading("You won the match!")
+			self._gameHUD:SetHeading("You won the match!", Color3.fromRGB(0, 255, 0))
+			self._gameHUD:SetSubheading(nil)
 			_deps.SharedPackages.Sounds:PlaySound("WinMatch")
 		else
 			self._gameCamera:Focus(winnerCameraCFrame or CFrame.new(), nil, true)
-			self._gameHUD:SetHeading("Opponent won the match")
+			self._gameHUD:SetHeading("Opponent won the match", Color3.fromRGB(255, 0, 0))
 			_deps.SharedPackages.Sounds:PlaySound("LoseMatch")
+			_deps.SharedPackages.Sounds:PlaySound("Angry")
 		end
 
+		task.wait(5.0)
 		self:EndMatch()
 		return
 	end
@@ -123,7 +128,7 @@ function MatchController:HandleGameStateUpdate(kind: GameBroadcastState, ...: an
 
 	if kind == "TurnCountdown" then
 		local secondsLeft: number = (... and (...).secondsLeft) or 0
-		self._gameHUD:SetSubheading("Skipping turn in " .. tostring(secondsLeft) .. "s")
+		self._gameHUD:SetSubheading("Skipping pick in " .. tostring(secondsLeft) .. "s")
 		return
 	end
 
@@ -133,6 +138,21 @@ function MatchController:HandleGameStateUpdate(kind: GameBroadcastState, ...: an
 		local tween: boolean = (... and (...).tween) or false
 
 		self._gameCamera:Focus(cframe, subject, tween)
+		return
+	end
+
+	if kind == "ClearMessages" then
+		self._gameHUD:SetHeading(nil)
+		self._gameHUD:SetSubheading(nil)
+		return
+	end
+
+	if kind == "Message" then
+		local payload = ...
+		if typeof(payload) == "table" then
+			self._gameHUD:SetHeading(payload.heading)
+			self._gameHUD:SetSubheading(payload.subheading)
+		end
 		return
 	end
 
@@ -163,6 +183,35 @@ function MatchController:HandleGameStateUpdate(kind: GameBroadcastState, ...: an
 		return
 	end
 
+	if kind == "YourResult" then
+		local result: string = (... and (...).result) or "Empty"
+		if result == "Win" then
+			self._gameHUD:SetHeading("STEAL!", Color3.fromRGB(0, 255, 0))
+			self._gameHUD:SetSubheading(nil)
+		elseif result == "Lose" then
+			_deps.SharedPackages.Sounds:PlaySound("Scream")
+			self._gameHUD:SetHeading("BOMB!", Color3.fromRGB(255, 0, 0))
+			self._gameHUD:SetSubheading(nil)
+		else
+			self._gameHUD:SetHeading("EMPTY!", Color3.fromRGB(0, 255, 0))
+			self._gameHUD:SetSubheading("1 cup has been removed")
+		end
+	end
+
+	if kind == "TheirResult" then
+		local result: string = (... and (...).result) or "Empty"
+		if result == "Win" then
+			self._gameHUD:SetHeading("STOLEN!", Color3.fromRGB(255, 0, 0))
+			self._gameHUD:SetSubheading(nil)
+		elseif result == "Lose" then
+			self._gameHUD:SetHeading("BOMB!", Color3.fromRGB(0, 255, 0))
+			self._gameHUD:SetSubheading(nil)
+		else
+			self._gameHUD:SetHeading("EMPTY!", Color3.fromRGB(0, 255, 0))
+			self._gameHUD:SetSubheading("1 cup has been removed")
+		end
+	end
+
 	if kind == "Reveal" then
 		local payload = ...
 		self:_onReveal(payload)
@@ -190,12 +239,19 @@ function MatchController:HandleGameStateUpdate(kind: GameBroadcastState, ...: an
 	-- Unknown / not handled yet
 end
 
-function MatchController:StartMatch()
+function MatchController:StartMatch(tableInstance: Model?)
 	-- Show the HUD
 	if self._gameHUD then
 		self._gameHUD:SetVisible(true)
 	end
 
+	-- Enabled game input
+	if self._gameInput then
+		self._gameInput:SetInputEnabled(true)
+	end
+
+	-- Store table instance for later use
+	self._tableInstance = tableInstance
 	self._matchRunning = true
 end
 
@@ -216,9 +272,35 @@ function MatchController:EndMatch()
 	if self._gameCamera then
 		self._gameCamera:Reset(false)
 	end
+
+	-- Reset game input
+	if self._gameInput then
+		self._gameInput:SetInputEnabled(false)
+		self._gameInput:ClearItemObjects()
+	end
 end
 
 -- ========== Internal ========== --
+
+-- ===== Helpers ===== --
+function MatchController:_getBoardModels(boardUserId: number): { Model }
+	-- find the player folder based on slot ordering, or by BoardUserId attribute
+	-- simplest: scan tableInstance descendants for models with BoardUserId attr
+	local models = {}
+	local tableInstance = self._tableInstance -- store from RoundBegin payload
+	if not tableInstance then
+		warn("[MatchController] _getBoardModels: no tableInstance set")
+		return models
+	end
+
+	for _, inst in ipairs(tableInstance:GetDescendants()) do
+		if inst:IsA("Model") and inst:GetAttribute("BoardUserId") == boardUserId then
+			table.insert(models, inst)
+		end
+	end
+	print("[MatchController] _getBoardModels: found", #models, "models for boardUserId", boardUserId, models)
+	return models
+end
 
 -- ===== Round Handlers ===== --
 function MatchController:_onRoundBegin(payload: any)
@@ -249,10 +331,10 @@ function MatchController:_onRoundEnd(payload: any)
 	end
 
 	if winnerUserId == self._localUserId then
-		self._gameHUD:SetHeading("You won the round!")
+		-- self._gameHUD:SetHeading("You won the round!", Color3.fromRGB(0, 255, 0))
 		_deps.SharedPackages.Sounds:PlaySound("WinRound")
 	else
-		self._gameHUD:SetHeading("You lost the round!")
+		-- self._gameHUD:SetHeading("You lost the round!", Color3.fromRGB(255, 0, 0))
 		_deps.SharedPackages.Sounds:PlaySound("LoseRound")
 	end
 end
@@ -263,29 +345,68 @@ function MatchController:_onTurn(payload: any)
 	-- { phase = "Setup" | "Shuffle" | "Choose", attackerUserId=?, defenderUserId=? }
 	if typeof(payload) ~= "table" then return end
 
-	self._currentPhase = payload.phase
-	self._attackerUserId = payload.attackerUserId
-	self._defenderUserId = payload.defenderUserId
+	local phase = payload.phase
+	local attackerUserId = payload.attackerUserId
+	local defenderUserId = payload.defenderUserId
 
-	if payload.phase == "Setup" then
-		self._gameHUD:SetHeading("Hide your winning item")
-		self._gameHUD:SetSubheading("Pick an item position")
-	elseif payload.phase == "Shuffle" then
-		-- If local player is attacker, this is the “watch + memorise” moment
-		if self._attackerUserId == self._localUserId then
-			self._gameHUD:SetHeading("Memorise the losing items!")
-			self._gameHUD:SetSubheading("They will shuffle…")
-		else
-			self._gameHUD:SetHeading("Shuffling…")
+	local shuffleEnabled = payload.shuffleEnabled or false
+
+	local hoverEnabled = payload.hoverEnabled or false
+	local shakeEnabled = payload.shakeEnabled or false
+
+	-- Always clear first
+	self._gameInput:ClearItemObjects()
+	self._gameInput:SetClickAction(nil)
+	self._gameInput:SetShuffleButtonVisible(false)
+
+	self._currentPhase = phase
+	self._attackerUserId = attackerUserId
+	self._defenderUserId = defenderUserId
+
+	self._gameInput:SetShuffleButtonVisible(shuffleEnabled)
+	self._gameInput:SetHoverEnabled(hoverEnabled)
+	self._gameInput:SetShakeEnabled(shakeEnabled)
+
+	if phase == "Setup" then
+		local waitingForDefender = payload.waitingForDefender == true
+
+		if defenderUserId == self._localUserId then
+			-- Defender: choose where to hide lunch
+			self._gameInput:SetClickAction("SetWinningItem")
+
+			local models = self:_getBoardModels(defenderUserId)
+			self._gameInput:CreateItemObjects(models)
+			self._gameInput:AnimateItemsIn()
+
+			self._gameHUD:SetHeading("HIDE YOUR LUNCH!")
+			self._gameHUD:SetSubheading("Tap a cup")
+		elseif waitingForDefender then
+			-- Attacker: opponent is choosing
+			self._gameHUD:SetHeading("Opponent is choosing where to hide their lunch...")
 			self._gameHUD:SetSubheading(nil)
 		end
-	elseif payload.phase == "Choose" then
+	elseif phase == "Shuffle" then
+		-- If local player is attacker, this is the “watch + memorise” moment
 		if self._attackerUserId == self._localUserId then
-			self._gameHUD:SetHeading("Pick an item!")
-			self._gameHUD:SetSubheading("Find the winning item")
-		else
-			self._gameHUD:SetHeading("Opponent is choosing…")
+			self._gameHUD:SetHeading(nil)
 			self._gameHUD:SetSubheading(nil)
+		else
+			self._gameHUD:SetHeading(nil)
+			self._gameHUD:SetSubheading(nil)
+		end
+	elseif phase == "Choose" then
+		if self._attackerUserId == self._localUserId then
+			-- Only attacker/chooser can click defender board to select
+			self._gameInput:SetClickAction("SelectItem")
+			local models = self:_getBoardModels(defenderUserId)
+			self._gameInput:CreateItemObjects(models)
+
+			-- Show text
+			self._gameHUD:SetHeading("CHOOSE A CUP!")
+			self._gameHUD:SetSubheading(nil)
+		else
+			self._gameHUD:SetHeading(nil)
+			self._gameHUD:SetSubheading("Opponent is choosing a cup...")
 		end
 	end
 end
@@ -293,15 +414,25 @@ end
 -- ===== Reveal / Shuffle / Board Updates ===== --
 function MatchController:_onReveal(payload: any)
 	-- payload expected:
-	-- { defenderUserId=number, losingItemMask={ [i]=boolean }, revealSeconds=number }
+	-- { defenderUserId=number, losingItemMask={ [i]=boolean }, itemModels={ [i]=Model }, revealSeconds=number }
 	if typeof(payload) ~= "table" then return end
 	self._revealActive = true
 	self._lastReveal = payload
 
-	-- STUB: apply highlight on the defender board items based on mask
-	-- You’ll implement the visuals later (e.g. item:SetAttribute("IsLosing", true) + client glow)
-	-- Example:
-	-- self:_setBoardMaskVisuals(payload.defenderUserId, payload.losingItemMask, true)
+	local losingItemMask = payload.losingItemMask
+	if typeof(losingItemMask) ~= "table" then
+		losingItemMask = {}
+	end
+
+	for itemIndex, isLosing in losingItemMask do
+		task.spawn(function()
+			self._gameHUD:RevealItemMask(
+				payload.itemModels[itemIndex],
+				isLosing and "Lose" or "Empty",
+				payload.revealSeconds or 1.25
+			)
+		end)
+	end
 
 	local revealSeconds = payload.revealSeconds or 1.25
 	task.delay(revealSeconds, function()
@@ -344,7 +475,7 @@ function MatchController:_onBoardUpdate(payload: any)
 
 	-- Optional HUD hint
 	if self._attackerUserId == self._localUserId then
-		self._gameHUD:SetSubheading(("Items left: %d"):format(numItems))
+		self._gameHUD:SetSubheading("1 cup was removed")
 	end
 end
 
@@ -358,11 +489,11 @@ function MatchController:_onAutoAction(payload: any)
 	if payload.kind == "SetWinningItem" then
 		-- only show to the player whose item was set
 		if payload.userId == self._localUserId then
-			self._gameHUD:SetSubheading("Auto-picked a hiding spot")
+			-- self._gameHUD:SetSubheading("Auto-picked a hiding spot")
 		end
 	elseif payload.kind == "SelectItem" then
 		if payload.userId == self._localUserId then
-			self._gameHUD:SetSubheading("Auto-picked an item")
+			-- self._gameHUD:SetSubheading("Auto-picked an item")
 		end
 	elseif payload.kind == "RevealItem" then
 		-- This is where you’d animate opening + reveal feedback
@@ -422,6 +553,21 @@ function MatchController:Init(deps: Deps)
 
 	-- // Create a game camera
 	self._gameCamera = GameCamera.new(_deps, {})
+
+	-- // Create a game input handler
+	self._gameInput = GameInput.new(_deps, {
+		root = GameHUDGui,
+		shuffleButton = {
+			container = GuiRefs.Get(GameHUDGui, { "Actions", "Shuffle" }) :: Frame,
+			select = GuiRefs.Get(GameHUDGui, { "Actions", "Shuffle", "Select" }) :: TextButton,
+		},
+		onAction = function(action: GameTypes.GameAction, payload: { any }?)
+			-- Forward to server
+			print("GameInput action:", action, payload)
+			self._gameActionRemote:FireServer(action, payload or {})
+			return true
+		end,
+	})
 end
 
 function MatchController:Start()
@@ -431,6 +577,7 @@ function MatchController:Start()
 	-- // Init the HUD and camera
 	self._gameHUD:Init()
 	self._gameCamera:Init()
+	self._gameInput:Init()
 
 	-- // Setup remotes
 	table.insert(self._conns, self._gameStateRemote.OnClientEvent:Connect(function(kind: GameBroadcastState, ...: any)

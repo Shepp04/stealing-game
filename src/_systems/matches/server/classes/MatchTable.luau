@@ -51,6 +51,7 @@ export type Opts = {
 	gameClass: GameAPI,
 	minPlayers: number?,
 	maxPlayers: number?,
+	onMatchEnd: ((players: { Player }, winner: Player?) -> ())?,
 }
 
 export type MatchTableAPI = {
@@ -97,9 +98,8 @@ local COUNTDOWN = 5
 local COINS_PER_MATCH_WIN = 10
 
 -- // Animations
-local WINNER_DANCE_ANIMATION_IDS : {[number]: string} = {
-	[1] = "rbxassetid://121509216343037",
-	[2] = "rbxassetid://83630821231909",
+local WINNER_DANCE_ANIMATION_IDS : {[number]: number | string} = {
+	[1] = "rbxassetid://88737934484306",
 }
 
 -- ========== Helpers =========== --
@@ -204,6 +204,8 @@ function MatchTable.new(deps: Deps, opts: Opts?): MatchTableAPI
 	self._minPlayers = self._opts.minPlayers or 2
 	self._maxPlayers = self._opts.maxPlayers or 2
 
+	self.onMatchEnd = self._opts.onMatchEnd
+
 	-- Get remotes
 	self._gameStateRemote = _deps.SharedPackages.Remotes:GetRemote("RemoteEvent", "GameState") :: RemoteEvent
 	self._gameActionRemote = _deps.SharedPackages.Remotes:GetRemote("RemoteEvent", "GameAction") :: RemoteEvent
@@ -223,8 +225,8 @@ function MatchTable.new(deps: Deps, opts: Opts?): MatchTableAPI
 		self.components.cameraCFrames = {
 			matchEnd = cameraCFramesFolder:FindFirstChild("MatchEnd").CFrame,
 			winner = cameraCFramesFolder:FindFirstChild("Winner").CFrame,
-			player1 = cameraCFramesFolder:FindFirstChild("Player1").CFrame,
-			player2 = cameraCFramesFolder:FindFirstChild("Player2").CFrame,
+			board1 = cameraCFramesFolder:FindFirstChild("Board1").CFrame,
+			board2 = cameraCFramesFolder:FindFirstChild("Board2").CFrame,
 		}
 	end
 
@@ -279,7 +281,7 @@ function MatchTable:StartGame()
 	-- Remove the leave Guis and tell the players the match has begun (and initial state info)
 	for _, plr in self.state.players do
 		toggleLeaveGui(plr :: Player, false)
-		self._gameStateRemote:FireClient(plr, "MatchBegin")
+		self._gameStateRemote:FireClient(plr, "MatchBegin", { tableInstance = self.components.tableInstance })
 		self._gameStateRemote:FireClient(plr, "Players", { userId1 = self.state.players[1].UserId, userId2 = self.state.players[2].UserId })
 	end
 	
@@ -295,6 +297,13 @@ end
 function MatchTable:EndGame(winner: Player?)
 	if self.state.status ~= "Running" then return false end
 
+	-- Run on match end callback if provided
+	if self.onMatchEnd then
+		pcall(function()
+			self.onMatchEnd(self.state.players, winner)
+		end)
+	end
+	
 	for _, plr in ipairs(self.state.players) do
 		self._gameStateRemote:FireClient(plr, "MatchOver", {
 			winnerUserId = winner and winner.UserId or 0,
@@ -304,12 +313,13 @@ function MatchTable:EndGame(winner: Player?)
 			if plr == winner then
 				_deps.Services.CurrencyService:GiveCurrency(plr, "Wins", 1, false, false)
 				_deps.Services.CurrencyService:GiveCurrency(plr, "Streak", 1, false, false)
-				_deps.Services.CurrencyService:GiveCurrency(plr, "Coins", COINS_PER_MATCH_WIN, true, false)
 			else
 				_deps.Services.CurrencyService:SetCurrency(plr, "Streak", 0)
 			end
 		end
 	end
+
+	print("[MatchTable] Game Ended. Winner:", if winner then winner.Name else "None")
 
 	-- Teleport the winner and make them dance
 	if (winner) then
@@ -335,12 +345,15 @@ function MatchTable:EndGame(winner: Player?)
 			local animTrack = animator:LoadAnimation(animation)
 			animTrack.Looped = true
 			animTrack:Play()
+			print(animTrack)
 			
 			-- Record the winner's current CFrame and teleport them to the winner position
 			local originalCFrame = root.CFrame
 			root.CFrame = self.components.winnerCFrame
 			
+			print("Playing music...")
 			task.wait(5.0)
+			print("Done...")
 			
 			-- Fade out the music
 			_deps.SharedPackages.Sounds:StopLoopingSound("WinnerMusic", true)
@@ -353,6 +366,8 @@ function MatchTable:EndGame(winner: Player?)
 		task.wait(2.5)
 	end
 	
+	print("[MatchTable] Cleaning up match...")
+
 	-- Destroy the game instance
 	if self.game and self.game.Destroy then
 		self.game:Destroy()
@@ -369,6 +384,7 @@ function MatchTable:EndGame(winner: Player?)
 end
 
 function MatchTable:Reset()
+	print("[MatchTable] Resetting table state...")
 	self.state.status = "Waiting"
 
 	for _, plr in self.state.players do
@@ -613,7 +629,7 @@ function MatchTable:_startMatch()
 	self:_broadcastScores()
 end
 
-function MatchTable:_startNextRound()
+function MatchTable:_startNextRound(starterUserId: number?)
 	-- Guard
 	if self.state.status ~= "Running" then return end
 	if self.game then
@@ -643,7 +659,7 @@ function MatchTable:_startNextRound()
 		},
 	}) :: GameAPI
 
-	self.game:Start()
+	self.game:Start(starterUserId)
 end
 
 
@@ -679,7 +695,16 @@ function MatchTable:_onRoundEnded(winner: Player?)
 		-- Ensure still running & still 2 players
 		if self.state.status ~= "Running" then return end
 		if #self.state.players < self._minPlayers then return end
-		self:_startNextRound()
+
+		-- Start with the previous round's loser starting first
+		local loserUserId: number? = nil
+		for _, plr in ipairs(self.state.players) do
+			if plr ~= winner then
+				loserUserId = plr.UserId
+				break
+			end
+		end
+		self:_startNextRound(loserUserId)
 	end)
 end
 
@@ -704,6 +729,24 @@ function MatchTable:Init()
 		if not player then return end
 
 		self:Join(player)
+	end))
+
+	-- // Listen to game actions
+	table.insert(self._conns, self._gameActionRemote.OnServerEvent:Connect(function(player: Player, action: GameAction, payload: { any }?)
+		print("MatchTable received action:", action, "from player:", player.Name)
+		-- Only accept actions for this table
+		if self.state.status ~= "Running" then return end
+		if not self.state.playerSet[player] then return end
+		if not self.game then return end
+
+		-- Anti-spam (per player)
+		local key = ("%d_TableAction_%s"):format(player.UserId, self._debugId)
+		if not _deps.SharedPackages.Debounce:Try(key, 0.1) then
+			return
+		end
+
+		-- Forward to game instance
+		self.game:HandleAction(player, action, payload)
 	end))
 end
 

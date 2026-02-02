@@ -92,6 +92,35 @@ local Sounds: SoundsConfig = {
             rolloffMaxDistance = 50,
             volume = 0.75, -- [0.00, 1.00]
         },
+
+        ItemLand = {
+            id = "rbxassetid://9118822373",
+            playbackSpeed = 1.0,
+            rolloffMaxDistance = 100,
+            volume = 1.00, -- [0.00, 1.00]
+        },
+        
+        Explode = {
+            id = "rbxassetid://5801257793",
+            playbackSpeed = 1.0,
+            rolloffMaxDistance = 100,
+            volume = 1.00, -- [0.00, 1.00]
+        },
+
+        -- Emote sounds
+        Angry = {
+            id = "rbxassetid://154157312",
+            playbackSpeed = 0.80,
+            rolloffMaxDistance = 50,
+            volume = 1.00, -- [0.00, 1.00]
+        },
+
+        Scream = {
+            id = "rbxassetid://154157589",
+            playbackSpeed = 1.2,
+            rolloffMaxDistance = 50,
+            volume = 1.00, -- [0.00, 1.00]
+        },
     },
     Get = function(self: SoundsConfig, name: string)
         if self.sounds[name] then

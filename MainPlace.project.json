@@ -56,6 +56,9 @@
             },
             "GroupRewardGui": {
               "$path": "src/_systems/social/shared/assets/ui/GroupRewardGui.rbxmx"
+            },
+            "Itemtag": {
+              "$path": "src/_systems/stealing/shared/assets/ui/Itemtag.rbxmx"
             }
           },
           "Models": {
@@ -69,6 +72,9 @@
           },
           "Social": {
             "$path": "src/_systems/social/shared/utils/Social.luau"
+          },
+          "Stealing": {
+            "$path": "src/_systems/stealing/shared/utils/Stealing.luau"
           }
         }
       },
@@ -176,6 +182,9 @@
             "$className": "Folder",
             "Currency": {
               "$path": "src/_systems/currency/data_types/Currency.luau"
+            },
+            "StealableItem": {
+              "$path": "src/_systems/stealing/data_types/StealableItem.luau"
             }
           }
         }
@@ -229,11 +238,20 @@
             "GameHUD": {
               "$path": "src/_systems/matches/client/components/GameHUD.luau"
             },
+            "GameInput": {
+              "$path": "src/_systems/matches/client/components/GameInput.luau"
+            },
             "FriendAlert": {
               "$path": "src/_systems/social/client/components/FriendAlert.luau"
             },
             "FriendBoostedCurrencyLabel": {
               "$path": "src/_systems/social/client/components/FriendBoostedCurrencyLabel.luau"
+            },
+            "HeldItemUpgradeStand": {
+              "$path": "src/_systems/stealing/client/components/HeldItemUpgradeStand.luau"
+            },
+            "StealResultDisplay": {
+              "$path": "src/_systems/stealing/client/components/StealResultDisplay.luau"
             }
           },
           "Utils": {

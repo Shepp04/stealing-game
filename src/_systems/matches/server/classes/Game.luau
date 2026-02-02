@@ -3,6 +3,7 @@
 
 -- // Roblox Services
 local ContextActionService = game:GetService("ContextActionService")
+local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -78,7 +79,7 @@ export type GameAPI = {
 
 	Start: (self: GameAPI) -> (),
 	Destroy: (self: GameAPI) -> (),
-	HandleAction: (self: GameAPI, player: Player, action: GameAction, payload: any) -> (),
+	HandleAction: (self: GameAPI, player: Player, action: GameAction, payload: { any }?) -> (),
 }
 
 local Game = {}
@@ -101,6 +102,8 @@ end
 -- ========== Constructor ========== --
 
 function Game.new(deps: Deps, opts: Opts): GameAPI
+	_deps = deps
+
 	local self = setmetatable({}, Game) :: any
 	self._deps = deps
 	self._opts = opts
@@ -132,12 +135,30 @@ function Game.new(deps: Deps, opts: Opts): GameAPI
 	self._dead = false
 	self._conns = {}
 
+	-- // Validate model
+	local tableInstance = self.ctx.tableInstance
+	assert(tableInstance, "Game requires a table instance in context")
+
+	local cameraCFramesFolder = tableInstance:FindFirstChild("CameraCFrames") :: Folder?
+	if not cameraCFramesFolder then
+		error("Game requires CameraCFrames folder in table instance")
+	end
+
+	self._cameraCFrames = {
+		board1 = cameraCFramesFolder:FindFirstChild("Board1").CFrame :: CFrame,
+		board2 = cameraCFramesFolder:FindFirstChild("Board2").CFrame :: CFrame,
+		board1Overhead = cameraCFramesFolder:FindFirstChild("Board1Overhead").CFrame :: CFrame,
+		board2Overhead = cameraCFramesFolder:FindFirstChild("Board2Overhead").CFrame :: CFrame,
+		winner = cameraCFramesFolder:FindFirstChild("Winner").CFrame :: CFrame,
+		matchEnd = cameraCFramesFolder:FindFirstChild("MatchEnd").CFrame :: CFrame,
+	} :: { [string]: CFrame }
+
 	return (self :: any) :: GameAPI
 end
 
 -- ========== Public API ========== --
 
-function Game:Start()
+function Game:Start(starterUserId: number?)
 	local players = self.ctx.getPlayers()
 	assert(#players == 2, "Game expects exactly 2 players")
 
@@ -146,55 +167,83 @@ function Game:Start()
 		self:_spawnBoardForPlayer(plr, seatIndex)
 	end
 
+	-- Pick attacker and defender for this round (only defender chooses hiding spot this turn)
+	local attackerUserId: number
+	local defenderUserId: number
+	if starterUserId then
+		defenderUserId = starterUserId
+		for _, plr in ipairs(players) do
+			if plr.UserId ~= starterUserId then
+				attackerUserId = plr.UserId
+				break
+			end
+		end
+	else
+		local startIdx = (self:_t("randomFirst", true) and math.random(1, 2)) or 1
+		attackerUserId = players[startIdx].UserId
+		defenderUserId = players[3 - startIdx].UserId
+	end
+	assert(attackerUserId and defenderUserId, "Failed to pick attacker and defender")
+
 	-- Broadcast round begin
 	self.ctx.broadcast("RoundBegin", {
 		userIds = { userId1 = players[1].UserId, userId2 = players[2].UserId },
 	})
 
-	-- Setup phase: both choose winning item simultaneously (timeout auto)
-	self.gameState.phase = "Setup"
-	self:_nextTurnToken()
-	self.ctx.broadcast("Turn", { phase = "Setup" })
+	-- Clear initial messages
+	self.ctx.broadcast("ClearMessages", {})
 
-	local setupSeconds = self:_t("setupTimeout", 12)
-	self:_armTurnTimeout(setupSeconds, function()
-		-- auto-pick winning item for anyone who hasn't chosen
-		for _, plr in ipairs(players) do
-			local board = self.gameState.boards[plr.UserId]
-			if board and not board.winningItemChosen then
-				self:_autoSetWinningItem(plr.UserId)
-			else
-				warn("No board found for player ", plr.Name)
-			end
-		end
-		-- if both chosen now, start the duel loop
-		self:_tryBeginDuel()
-	end)
-
-	-- Optional: tell clients to show “Pick where to hide winning item”
-	for _, plr in ipairs(players) do
-		self.ctx.send(plr, "AutoAction", { kind = "PromptSetWinningItem" })
-	end
+	-- Start turn: Setup (defender only) then shuffle/choose
+	self:_beginTurn(attackerUserId, defenderUserId)
 end
 
 -- ===== Actions ===== --
 
-function Game:HandleAction(player: Player, action: GameAction, payload: any)
+function Game:HandleAction(player: Player, action: GameAction, payload: { any }?)
 	if self._dead then return end
+
+	-- ===== Debug ===== --
+	print("[Game] HandleAction from player ", player.Name, " action=", action)
+	-- ================= --
+
+	if not payload then
+		payload = {}
+	end
 
 	if action == "SetWinningItem" then
 		if self.gameState.phase ~= "Setup" then return end
-		local itemIndex = payload.itemIndex :: number
+		if player.UserId ~= self.gameState.defenderUserId then return end
+		local itemIndex = payload.itemIndex or 0 :: number
 		self:_setWinningItem(player.UserId, itemIndex)
-		self:_tryBeginDuel()
+		self:_afterDefenderSetup()
 		return
 	end
 
 	if action == "SelectItem" then
 		if self.gameState.phase ~= "Choose" then return end
 		if player.UserId ~= self.gameState.attackerUserId then return end
-		local itemIndex = payload.itemIndex :: number
+		local itemIndex = payload.itemIndex or 0 :: number
 		self:_resolvePick(player.UserId, itemIndex)
+		return
+	end
+
+	if action == "StartShuffle" then
+		if self.gameState.phase ~= "Shuffle" then return end
+		if player.UserId ~= self.gameState.defenderUserId then return end
+		-- validate if shuffle is enabled for this player
+		if not self._isScrambleRunning then
+			self:_startScramble(player.UserId)
+		end
+		return
+	end
+
+	if action == "StopShuffle" then
+		if self.gameState.phase ~= "Shuffle" then return end
+		if player.UserId ~= self.gameState.defenderUserId then return end
+		-- validate if shuffle is enabled for this player
+		if self._isScrambleRunning then
+			self:_endScramble(player.UserId)
+		end
 		return
 	end
 
@@ -214,26 +263,6 @@ function Game:_t(key: string, defaultValue: any): any
 		return defaultValue
 	end
 	return v
-end
-
-function Game:_tryBeginDuel()
-	print("Trying to begin duel...")
-	local players = self.ctx.getPlayers()
-	local b1 = self.gameState.boards[players[1].UserId]
-	local b2 = self.gameState.boards[players[2].UserId]
-	if not b1 or not b2 then warn("Missing boards for players") return end
-	if not b1.winningItemChosen or not b2.winningItemChosen then warn("Winning items not chosen yet") return end
-
-	-- Assign contents once both winning items are chosen
-	self:_assignBoardContents(players[1].UserId)
-	self:_assignBoardContents(players[2].UserId)
-
-	-- Choose starting attacker randomly (or seat 1 for now)
-	local startIdx = (self:_t("randomFirst", true) and math.random(1, 2)) or 1
-	local attacker = players[startIdx]
-	local defender = players[3 - startIdx]
-
-	self:_beginTurn(attacker.UserId, defender.UserId)
 end
 
 function Game:_setWinningItem(userId: number, itemIndex: number)
@@ -276,7 +305,7 @@ function Game:_assignBoardContents(userId: number)
 	end
 
 	local winningItemIndex = board._winningItemIndex or math.random(1, n)
-	board.items[winningItemIndex].content = "WinningItem"
+	board.items[winningItemIndex].content = "Win"
 
 	-- fill losing items + empties in remaining slots
 	local remaining = {}
@@ -295,7 +324,7 @@ function Game:_assignBoardContents(userId: number)
 	-- losing items first
 	for i = 1, numLosingItems do
 		local idx = remaining[i]
-		board.items[idx].content = "LosingItem"
+		board.items[idx].content = "Lose"
 	end
 
 	-- remaining are empty safe (already Empty)
@@ -303,29 +332,238 @@ end
 
 -- ===== Turn Loop ===== --
 
+--[[
+	_beginTurn
+	Starts a turn: Setup (defender chooses hiding spot only), then after setup we reveal, shuffle, choose.
+]]
 function Game:_beginTurn(attackerUserId: number, defenderUserId: number)
+	if self._dead then return end
+
 	print("Beginning turn: attacker=", attackerUserId, " defender=", defenderUserId)
 	self.gameState.attackerUserId = attackerUserId
 	self.gameState.defenderUserId = defenderUserId
 	self.gameState.activeBoardUserId = defenderUserId
 
+	-- Setup phase: only defender chooses where to hide lunch
+	self.gameState.phase = "Setup"
+	local setupToken = self:_nextTurnToken()
+
+	-- Reset defender board so they can choose hiding spot again this turn
+	local defenderBoard = self.gameState.boards[defenderUserId]
+	if defenderBoard then
+		defenderBoard.winningItemChosen = false
+		defenderBoard._winningItemIndex = nil
+	end
+
+	for _, plr in ipairs(self.ctx.getPlayers()) do
+		if plr.UserId == defenderUserId then
+			self.ctx.send(plr, "Turn", {
+				phase = "Setup",
+				attackerUserId = attackerUserId,
+				defenderUserId = defenderUserId,
+				clickAction = "SetWinningItem",
+				clickableBoardUserId = defenderUserId,
+				shuffleEnabled = false,
+				hoverEnabled = true,
+				shakeEnabled = false,
+				waitingForDefender = false,
+			})
+		else
+			self.ctx.send(plr, "Turn", {
+				phase = "Setup",
+				attackerUserId = attackerUserId,
+				defenderUserId = defenderUserId,
+				clickAction = nil,
+				clickableBoardUserId = nil,
+				shuffleEnabled = false,
+				hoverEnabled = false,
+				shakeEnabled = false,
+				waitingForDefender = true,
+			})
+		end
+	end
+
+	-- Send camera (both see defender's board area for context)
+	self.ctx.broadcast("Camera", {
+		cframe = self._cameraCFrames["board" .. tostring(if defenderUserId == self.ctx.getPlayers()[1].UserId then 1 else 2) .. "Overhead"],
+		subject = nil,
+		tween = true,
+	})
+
+	local setupSeconds = self:_t("setupTimeout", 12)
+	self:_armTurnTimeout(setupSeconds, 5, function()
+		if self._dead or self._turnToken ~= setupToken then return end
+		local board = self.gameState.boards[defenderUserId]
+		if board and not board.winningItemChosen then
+			self:_autoSetWinningItem(defenderUserId)
+		end
+		self:_afterDefenderSetup()
+	end)
+end
+
+--[[
+	_afterDefenderSetup
+	Called when defender has chosen (or timeout). Assigns defender board contents and starts reveal/shuffle/choose.
+]]
+function Game:_afterDefenderSetup()
+	if self._dead then return end
+	self:_nextTurnToken() -- invalidate setup timeout
+
+	local defenderUserId = self.gameState.defenderUserId
+	local attackerUserId = self.gameState.attackerUserId
+	if not defenderUserId or not attackerUserId then return end
+
+	self:_assignBoardContents(defenderUserId)
+
 	-- Phase: Reveal to attacker (losing item mask of defender board)
 	self.gameState.phase = "Shuffle"
 	self:_nextTurnToken()
 
+	-- Send camera info
+	self.ctx.broadcast("Camera", {
+		cframe = self._cameraCFrames["board" .. tostring(if defenderUserId == self.ctx.getPlayers()[1].UserId then 1 else 2)],
+		subject = nil,
+		tween = true,
+	})
+
+	-- Reveal losing item mask to attacker
+	self:_revealLosingItemMask(attackerUserId, defenderUserId)
+	task.wait(self:_t("revealSeconds", 1.25) + 1.5) -- wait for reveal + buffer
+
+	-- Enable shuffle phase
+	for _, plr in ipairs(self.ctx.getPlayers()) do
+		if plr.UserId == attackerUserId then
+			self.ctx.send(plr, "Turn", {
+				phase = "Shuffle",
+				attackerUserId = attackerUserId,
+				defenderUserId = defenderUserId,
+
+				clickAction = nil,
+				clickableBoardUserId = nil,
+				shuffleEnabled = false,
+				hoverEnabled = false,
+				shakeEnabled = true,
+			})
+		else
+			self.ctx.send(plr, "Turn", {
+				phase = "Shuffle",
+				attackerUserId = attackerUserId,
+				defenderUserId = defenderUserId,
+
+				clickAction = nil,
+				clickableBoardUserId = nil,
+				shuffleEnabled = true,
+				hoverEnabled = false,
+				shakeEnabled = false,
+			})
+		end
+	end
+
+	-- Per-player messages: attacker sees "[Opponent] is shuffling", defender sees "Start shuffling!"
+	local defenderPlayer = Players:GetPlayerByUserId(defenderUserId)
+	local defenderName = defenderPlayer and defenderPlayer.DisplayName or "Opponent"
+	local shuffleSeconds = self:_t("shuffleTimeout", 4.0)
+
+	for _, plr in ipairs(self.ctx.getPlayers()) do
+		if plr.UserId == attackerUserId then
+			self.ctx.send(plr, "Message", { heading = nil, subheading = defenderName .. " is shuffling" })
+		else
+			self.ctx.send(plr, "Message", { heading = nil, subheading = "Start shuffling! (Auto-start in " .. tostring(shuffleSeconds) .. "s)" })
+		end
+	end
+
+	-- Arm timeout: only show countdown to defender in last 2 seconds (no global "Skipping turn")
+	self:_armTurnTimeout(shuffleSeconds, nil, function()
+		-- auto-start scramble
+		self:_startScramble(defenderUserId)
+	end, function(remaining: number)
+		if remaining <= 2 and remaining > 0 then
+			for _, plr in ipairs(self.ctx.getPlayers()) do
+				if plr.UserId == defenderUserId then
+					self.ctx.send(plr, "Message", { heading = nil, subheading = "Auto-starting in " .. tostring(remaining) .. "s" })
+				else
+					self.ctx.send(plr, "Message", { heading = nil, subheading = defenderName .. " is shuffling" })
+				end
+			end
+		end
+	end)
+end
+
+function Game:_startScramble(defenderUserId: number)
+	if self._isScrambleRunning then
+		return
+	end
+	self._isScrambleRunning = true
+
+	-- Placeholder if we want to separate scramble start from auto/manual driver
+	self:_armTurnTimeout(self:_t("maxShuffleTime", 5), 5, function()
+		-- auto-resolve scramble end
+		self:_endScramble(defenderUserId)
+	end)
+
+	local board = self.gameState.boards[defenderUserId]
+	if not board then return end
+
+	local n = #board.items
+	local baseBeats = self:_t("shuffleBeats", 4)
+	local beatDuration = self:_t("beatDuration", 1.0)
+
+	-- Simple escalation as board shrinks
+	local beats = clampInt(baseBeats + (6 - n), 2, 8)
+
+	self.gameState.shuffleBeats = beats
+	self.gameState.beatDuration = beatDuration
+
+	-- Run beats sequentially (exactly one swap per beat)
+	local token = self:_nextTurnToken()
+	for _ = 1, beats do
+		if self._dead or self._turnToken ~= token or not self._isScrambleRunning then return end
+
+		local pairs = self:_makeDisjointSwapPairs(#board.items, 1)
+		-- broadcast for client animation
+		self.ctx.broadcast("ShuffleBeat", {
+			defenderUserId = defenderUserId,
+			pairs = pairs,
+			beatDuration = beatDuration,
+		})
+
+		-- apply swap on server (instant or after duration; instant is OK for MVP)
+		self:_applySwapPairs(defenderUserId, pairs)
+
+		task.wait(beatDuration)
+		task.wait(0.75)
+	end
+
+	-- auto-end scramble after beats
+	if self._dead or self._turnToken ~= token or not self._isScrambleRunning then
+		return
+	end
+
+	self:_endScramble(defenderUserId)
+end
+
+function Game:_endScramble(defenderUserId: number)
+	if not self._isScrambleRunning then
+		return
+	end
+	
+	self._isScrambleRunning = false
+
+	local attackerUserId = self.gameState.attackerUserId
 	self.ctx.broadcast("Turn", {
 		phase = "Shuffle",
 		attackerUserId = attackerUserId,
 		defenderUserId = defenderUserId,
+
+		clickAction = nil,
+		clickableBoardUserId = nil,
+		shuffleEnabled = false,
+		hoverEnabled = false,
+		shakeEnabled = false,
 	})
+	task.wait(.5)
 
-	self:_revealLosingItemMask(attackerUserId, defenderUserId)
-
-	-- Now scramble (auto for MVP; later you can replace this with manual driver)
-	self:_runAutoScramble(defenderUserId, function()
-		-- After scramble, attacker chooses
-		self:_beginChoose(attackerUserId)
-	end)
+	self:_beginChoose(attackerUserId)
 end
 
 function Game:_beginChoose(attackerUserId: number)
@@ -333,10 +571,43 @@ function Game:_beginChoose(attackerUserId: number)
 	self.gameState.phase = "Choose"
 	self:_nextTurnToken()
 
-	self.ctx.broadcast("Turn", { phase = "Choose", attackerUserId = attackerUserId })
+	for _, plr in ipairs(self.ctx.getPlayers()) do
+		if plr.UserId == attackerUserId then
+			self.ctx.send(plr, "Turn", {
+				phase = "Choose",
+				attackerUserId = attackerUserId,
+				defenderUserId = self.gameState.defenderUserId,
+
+				clickAction = "SelectItem",
+				clickableBoardUserId = self.gameState.defenderUserId,
+				shuffleEnabled = false,
+				hoverEnabled = false,
+				shakeEnabled = true,
+			})
+		else
+			self.ctx.send(plr, "Turn", {
+				phase = "Choose",
+				attackerUserId = attackerUserId,
+				defenderUserId = self.gameState.defenderUserId,
+
+				clickAction = nil,
+				clickableBoardUserId = nil,
+				shuffleEnabled = false,
+				hoverEnabled = false,
+				shakeEnabled = true,
+			})
+		end
+	end
+	
+	-- Send camera info
+	self.ctx.broadcast("Camera", {
+		cframe = self._cameraCFrames["board" .. tostring(if attackerUserId == self.ctx.getPlayers()[1].UserId then 2 else 1)],
+		subject = nil,
+		tween = true,
+	})
 
 	local chooseSeconds = self:_t("chooseTimeout", 8)
-	self:_armTurnTimeout(chooseSeconds, function()
+	self:_armTurnTimeout(chooseSeconds, 3, function()
 		-- auto pick (random live item)
 		local defenderUserId = self.gameState.defenderUserId
 		if not defenderUserId then return end
@@ -349,6 +620,9 @@ end
 
 function Game:_resolvePick(attackerUserId: number, itemIndex: number)
 	if self._dead then return end
+	-- Invalidate choose-phase countdown so "Skipping pick in Xs" stops and timeout callback no-ops
+	self:_nextTurnToken()
+
 	local defenderUserId = self.gameState.defenderUserId
 	if not defenderUserId then return end
 
@@ -367,14 +641,18 @@ function Game:_resolvePick(attackerUserId: number, itemIndex: number)
 		content = item.content,
 	})
 
-	if item.content == "LosingItem" then
+	if item.content == "Lose" then
+		self:_onLosingItemPicked(attackerUserId, defenderUserId, itemIndex)
+
 		-- attacker loses, defender wins round
 		local winner = Players:GetPlayerByUserId(defenderUserId)
 		self:_endRound(winner)
 		return
 	end
 
-	if item.content == "WinningItem" then
+	if item.content == "Win" then
+		self:_onWinningItemPicked(attackerUserId, defenderUserId, itemIndex)
+
 		-- attacker wins round
 		local winner = Players:GetPlayerByUserId(attackerUserId)
 		self:_endRound(winner)
@@ -382,8 +660,21 @@ function Game:_resolvePick(attackerUserId: number, itemIndex: number)
 	end
 
 	-- Empty safe: remove this item and swap roles
-	self:_removeItem(defenderUserId, itemIndex)
+	for _, plr in ipairs(self.ctx.getPlayers()) do
+		if plr.UserId == attackerUserId then
+			self.ctx.send(plr, "YourResult", {
+				result = "Safe",
+			})
+		else
+			self.ctx.send(plr, "TheirResult", {
+				result = "Safe",
+			})
+		end
+	end
 
+	self:_removeItem(defenderUserId, itemIndex)
+	task.wait(2.0) -- wait before moving on
+	
 	-- Swap attacker/defender
 	local newAttacker = defenderUserId
 	local newDefender = attackerUserId
@@ -411,16 +702,97 @@ function Game:_revealLosingItemMask(attackerUserId: number, defenderUserId: numb
 
 	local mask = {}
 	for i, item in ipairs(board.items) do
-		mask[i] = (item.content == "LosingItem") -- true if losing item, false otherwise
+		mask[i] = (item.content == "Lose") -- true if losing item (bomb), false otherwise
 	end
+
+	local itemModels = {} :: { [number]: Model }
+	for i, item in ipairs(board.items) do
+		itemModels[i] = item.instance
+	end
+
+	task.wait(1.0) -- small delay before reveal
 
 	local attacker = Players:GetPlayerByUserId(attackerUserId)
 	if attacker then
 		self.ctx.send(attacker, "Reveal", {
 			defenderUserId = defenderUserId,
 			losingItemMask = mask,
+			itemModels = itemModels,
 			revealSeconds = self:_t("revealSeconds", 1.25),
 		})
+	end
+end
+
+function Game:_onLosingItemPicked(attackerUserId: number, defenderUserId: number, itemIndex: number)
+	-- Send text info to client
+	for _, plr in ipairs(self.ctx.getPlayers()) do
+		if plr.UserId == attackerUserId then
+			self.ctx.send(plr, "YourResult", {
+				result = "Lose",
+			})
+		else
+			self.ctx.send(plr, "TheirResult", {
+				result = "Lose",
+			})
+		end
+	end
+
+	-- Create an explosion effect at the attacker's character
+	local attacker = Players:GetPlayerByUserId(attackerUserId)
+	local attackerChar = attacker and attacker.Character
+	local attackerRoot = attackerChar and attackerChar:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if attackerRoot then
+		self.ctx.broadcast("Camera", {
+			cframe = CFrame.new(
+				attackerRoot.Position + attackerRoot.CFrame.LookVector * 5 + Vector3.new(0, 2, 0),
+				attackerRoot.Position
+			),
+			subject = nil,
+			tween = true,
+		})
+		task.wait(1.0)
+		
+		local explosion = Instance.new("Explosion")
+		explosion.Position = attackerRoot.Position
+		explosion.BlastPressure = 0
+		explosion.BlastRadius = 5
+		explosion.Parent = attackerRoot
+		Debris:AddItem(explosion, 2)
+
+		_deps.SharedPackages.Sounds:PlaySound("Explode", attackerRoot.Position)
+
+		task.wait(0.5)
+	end
+end
+
+function Game:_onWinningItemPicked(attackerUserId: number, defenderUserId: number, itemIndex: number)
+	-- Send text info to client
+	for _, plr in ipairs(self.ctx.getPlayers()) do
+		if plr.UserId == attackerUserId then
+			self.ctx.send(plr, "YourResult", {
+				result = "Win",
+			})
+		else
+			self.ctx.send(plr, "TheirResult", {
+				result = "Win",
+			})
+		end
+	end
+
+	-- Create a celebratory effect at the attacker's character
+	local attacker = Players:GetPlayerByUserId(attackerUserId)
+	local attackerChar = attacker and attacker.Character
+	local attackerRoot = attackerChar and attackerChar:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if attackerRoot then
+		self.ctx.broadcast("Camera", {
+			cframe = CFrame.new(
+				attackerRoot.Position + attackerRoot.CFrame.LookVector * 5 + Vector3.new(0, 2, 0),
+				attackerRoot.Position
+			),
+			subject = nil,
+			tween = true,
+		})
+		task.wait(2.0)
 	end
 end
 
@@ -431,7 +803,7 @@ function Game:_runAutoScramble(defenderUserId: number, onDone: () -> ())
 
 	local n = #board.items
 	local baseBeats = self:_t("shuffleBeats", 4)
-	local beatDuration = self:_t("beatDuration", 0.45)
+	local beatDuration = self:_t("beatDuration", 1.0)
 
 	-- Simple escalation as board shrinks
 	local beats = clampInt(baseBeats + (6 - n), 2, 8)
@@ -445,7 +817,7 @@ function Game:_runAutoScramble(defenderUserId: number, onDone: () -> ())
 		for _ = 1, beats do
 			if self._dead or self._turnToken ~= token then return end
 
-			local pairs = self:_makeDisjointSwapPairs(#board.items)
+			local pairs = self:_makeDisjointSwapPairs(#board.items, 1)
 			-- broadcast for client animation
 			self.ctx.broadcast("ShuffleBeat", {
 				defenderUserId = defenderUserId,
@@ -457,28 +829,47 @@ function Game:_runAutoScramble(defenderUserId: number, onDone: () -> ())
 			self:_applySwapPairs(defenderUserId, pairs)
 
 			task.wait(beatDuration)
+			task.wait(0.75)
 		end
+
+		task.wait(self:_t("revealSeconds", 1.25)) -- wait for reveal + buffer
 
 		if self._dead or self._turnToken ~= token then return end
 		onDone()
 	end)
 end
 
-function Game:_makeDisjointSwapPairs(n: number): { {a: number, b: number} }
-	-- Returns disjoint swap pairs covering ~half the items.
-	-- Example for n=6 -> 3 pairs; n=5 -> 2 pairs
+--[[
+	_makeDisjointSwapPairs
+	Returns exactly numPairs disjoint swap pairs (each pair swaps two distinct indices).
+	Used for shuffle beats; one swap per beat gives predictable, readable shuffling.
+
+	@param n: number, number of items on board
+	@param numPairs: number, number of pairs to return (e.g. 1 for one swap per beat)
+	@return { {a: number, b: number} }
+]]
+function Game:_makeDisjointSwapPairs(n: number, numPairs: number): { {a: number, b: number} }
+	if n < 2 or numPairs < 1 then
+		return {}
+	end
+
 	local idxs = {}
-	for i = 1, n do idxs[i] = i end
+	for i = 1, n do
+		idxs[i] = i
+	end
 	for i = n, 2, -1 do
 		local j = math.random(1, i)
 		idxs[i], idxs[j] = idxs[j], idxs[i]
 	end
 
 	local pairs = {}
-	local i = 1
-	while i < n do
-		table.insert(pairs, { a = idxs[i], b = idxs[i + 1] })
-		i += 2
+	for p = 1, numPairs do
+		local i = (p - 1) * 2 + 1
+		local j = i + 1
+		if j > n then
+			break
+		end
+		table.insert(pairs, { a = idxs[i], b = idxs[j] })
 	end
 	return pairs
 end
@@ -502,7 +893,7 @@ function Game:_applySwapPairs(defenderUserId: number, pairs: { {a: number, b: nu
 			-- Lerp to new position
 			task.spawn(function()
 				local startCF = item.instance:GetPivot()
-				local duration = self.gameState.beatDuration * 0.8
+				local duration = 0.3 -- self.gameState.beatDuration * 0.8
 				local elapsed = 0
 				while elapsed < duration do
 					local alpha = elapsed / duration
@@ -531,6 +922,7 @@ function Game:_removeItem(boardUserId: number, itemIndex: number)
 
 	table.remove(board.items, itemIndex)
 
+	--[[
 	-- Re-pack posIndex to 1..n and reposition
 	for i, c in ipairs(board.items) do
 		c.posIndex = i
@@ -552,11 +944,32 @@ function Game:_removeItem(boardUserId: number, itemIndex: number)
 			end)
 		end
 	end
+	--]]
 
 	self.ctx.broadcast("BoardUpdate", {
 		boardUserId = boardUserId,
 		numItems = #board.items,
 	})
+end
+
+function Game:_getItemModelClone(player: Player): Model
+	-- Create a blank model
+	local m = Instance.new("Model")
+	local basePart = Instance.new("Part")
+	basePart.Name = "BasePart"
+	basePart.Size = Vector3.new(1, 1, 1)
+	basePart.Transparency = 1
+	basePart.Anchored = true
+	basePart.CanCollide = false
+	basePart.Parent = m
+	m.PrimaryPart = basePart
+
+	local visualModel = SAMPLE_ITEM_MODEL:Clone()
+	visualModel.Name = "Visual"
+	visualModel:PivotTo(basePart.CFrame)
+	visualModel.Parent = m
+
+	return m
 end
 
 function Game:_spawnBoardForPlayer(player: Player, seatIndex: number)
@@ -577,19 +990,36 @@ function Game:_spawnBoardForPlayer(player: Player, seatIndex: number)
 	end
 
 	local numItems = clampInt(self:_t("numItems", 6), 3, 10)
-	local spacing = self:_t("itemSpacing", 3)
+	local boardSizeX = self:_t("boardSizeX", 1.0)
+	local boardSizeZ = self:_t("boardSizeZ", 1.25)
 
+	-- Form a grid layout
+	local cols = math.ceil(math.sqrt(numItems * (boardSizeX / boardSizeZ)))
+	local rows = math.ceil(numItems / cols)
+	local spacingX = boardSizeX / rows
+	local spacingZ = boardSizeZ / cols
+	
 	local positions = {}
 	for i = 1, numItems do
-		positions[i] = spawnPart.CFrame * CFrame.new(0, 0, (i - 1) * spacing)
+		-- Centre the cframe positions around the spawnPart
+		local row = math.floor((i - 1) / cols)
+		local col = (i - 1) % cols
+		local offsetX = (col - (cols - 1) / 2) * spacingX
+		local offsetZ = (row - (rows - 1) / 2) * spacingZ
+		local cf = spawnPart.CFrame * CFrame.new(offsetZ, 0, offsetX)
+		positions[i] = cf
 	end
 
 	local items = {}
 	for i = 1, numItems do
-		local m = SAMPLE_ITEM_MODEL:Clone()
+		local m = self:_getItemModelClone(player)
 		m.Name = ("Item_%d"):format(i)
-		m.Parent = itemsFolder
 		m:PivotTo(positions[i])
+		m.Parent = itemsFolder
+
+		m:SetAttribute("ItemIndex", i)
+		m:SetAttribute("BoardUserId", player.UserId)
+
 		table.insert(items, {
 			instance = m,
 			posIndex = i,
@@ -612,7 +1042,13 @@ function Game:_nextTurnToken(): number
 	return self._turnToken
 end
 
-function Game:_armTurnTimeout(seconds: number, onTimeout: () -> ())
+--[[
+	_armTurnTimeout
+	Arms a timeout; optionally broadcasts TurnCountdown or calls onTick(remaining) each second.
+	When onTick is provided, it is called each second with remaining (no TurnCountdown broadcast).
+	When onTick is nil, broadcasts TurnCountdown when remaining <= clientCountdownSeconds.
+]]
+function Game:_armTurnTimeout(seconds: number, clientCountdownSeconds: number, onTimeout: () -> (), onTick: ((remaining: number) -> ())?)
 	local token = self._turnToken
 	task.spawn(function()
 		local remaining = seconds
@@ -622,7 +1058,9 @@ function Game:_armTurnTimeout(seconds: number, onTimeout: () -> ())
 			if self._dead or self._turnToken ~= token then
 				return
 			end
-			if remaining <= 5 then
+			if onTick then
+				onTick(remaining)
+			elseif typeof(clientCountdownSeconds) == "number" and remaining <= clientCountdownSeconds then
 				self.ctx.broadcast("TurnCountdown", { secondsLeft = remaining })
 			end
 		end
