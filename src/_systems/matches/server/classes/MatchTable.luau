@@ -99,7 +99,7 @@ local COINS_PER_MATCH_WIN = 10
 
 -- // Animations
 local WINNER_DANCE_ANIMATION_IDS : {[number]: number | string} = {
-	[1] = "rbxassetid://88737934484306",
+	[1] = "rbxassetid://137996221193382",
 }
 
 -- ========== Helpers =========== --
@@ -131,6 +131,7 @@ local function freeFromTable(player: Player, playerSlots: { [number]: Folder })
 	local human = char and char:FindFirstChildWhichIsA("Humanoid")
 	if human then
 		human.WalkSpeed = _deps and _deps.Tunables and _deps.Tunables.defaultWalkSpeed or 16
+		human.JumpHeight = _deps and _deps.Tunables and _deps.Tunables.defaultJumpHeight or 7.2
 	end
 end
 
@@ -322,21 +323,22 @@ function MatchTable:EndGame(winner: Player?)
 	print("[MatchTable] Game Ended. Winner:", if winner then winner.Name else "None")
 
 	-- Teleport the winner and make them dance
-	if (winner) then
+	if winner then
 		local char = winner.Character
 		local root = char and char:FindFirstChild("HumanoidRootPart") :: BasePart
 		local human = char and char:FindFirstChild("Humanoid") :: Humanoid
-		if (root and human) then
+		if root and human then
+			print("Found root and human:", root, human)
 			-- Load a dance animation
 			local animator = human:FindFirstChildOfClass("Animator") :: Animator
-			if not (animator) then
+			if not animator then
 				animator = Instance.new("Animator")
 				animator.Parent = human
 			end
 			
-			local animID = "rbxassetid://182436842" -- self:_getWinnerDanceId(winner)
+			local animId = self:_getWinnerDanceId(winner)
 			local animation = Instance.new("Animation")
-			animation.AnimationId = animID
+			animation.AnimationId = animId
 			
 			-- Play music
 			_deps.SharedPackages.Sounds:PlayLoopingSound("WinnerMusic", self.components.tableInstance:FindFirstChild("Trigger"), nil, true)
@@ -471,6 +473,7 @@ function MatchTable:Join(player: Player): boolean
 		if char and root and human then
 			root.CFrame = chosenPart.CFrame
 			human.WalkSpeed = 0
+			human.JumpHeight = 0
 		end
 	end
 
@@ -514,7 +517,7 @@ end
 
 -- ========== Internal ========== --
 
-function MatchTable:_getWinnerDanceID(player: Player): string
+function MatchTable:_getWinnerDanceId(player: Player): string
 	return WINNER_DANCE_ANIMATION_IDS[math.random(1, #WINNER_DANCE_ANIMATION_IDS)]
 end
 
@@ -583,10 +586,13 @@ function MatchTable:_validateTableInstance(instance: Instance?): boolean
 end
 
 function MatchTable:_buildCtx(): GameContext
+	-- Get table attributes
+	local numItems = self.components.tableInstance:GetAttribute("NumItems")
+	local shuffleSpeed = self.components.tableInstance:GetAttribute("ShuffleSpeed")
 	return {
 		tableInstance = self.components.tableInstance,
-		numItems = self._numItems or 5,
-		shuffleSpeed = self._shuffleSpeed or 1,
+		numItems = typeof(numItems) == "number" and numItems or 6,
+		shuffleSpeed = typeof(numItems) == "number" and numItems or 1.0,
 		
 		getPlayers = function(): {Player}
 			return self.state.players
@@ -641,15 +647,19 @@ function MatchTable:_startNextRound(starterUserId: number?)
 
 	local ctx = self:_buildCtx()
 
+	-- Get table tunables
+	local numItems = tonumber(self.components.tableInstance:GetAttribute("NumItems")) or 6
+	assert(numItems >= 6, "A match table must have at least 6 items in the NumItems attribute!")
+
 	self.game = self.gameClass.new(_deps, {
 		ctx = ctx,
 		onGameEnd = function(winner: Player?)
 			self:_onRoundEnded(winner)
 		end,
 		tunables = {
-			-- Round tunables (keep these)
-			numItems = 6,
-			numLosingItems = 2,
+			-- Round tunables
+			numItems = numItems,
+			numLosingItems = numItems - 4,
 			numEmptySafe = 3,
 			revealSeconds = 1.25,
 			shuffleBeats = 4,

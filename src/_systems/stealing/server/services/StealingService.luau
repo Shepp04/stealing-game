@@ -63,8 +63,8 @@ local StealingService = {
 local _deps: Deps?
 
 -- // Assets
-local STEALABLE_ITEM_MODELS_FOLDER = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Models"):WaitForChild("StealableItems") :: Folder
 local SAMPLE_TIER_GUI = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Assets"):WaitForChild("UI"):WaitForChild("Itemtag") :: BillboardGui
+local SAMPLE_ITEM_TOOL = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Tools"):WaitForChild("SampleTool")
 
 -- ========== Public API ========== --
 
@@ -161,34 +161,36 @@ function StealingService:RefreshHeldItemCharacterDisplay(player: Player)
 		gui.Parent = char
 	end
 
-	gui.Frame.ItemName.Text = heldItemInfo.name .. " (" .. heldItemInfo.tier .. ")"
+	gui.Frame.ItemName.Text = heldItemInfo.name -- .. " (" .. heldItemInfo.tier .. ")"
 	if heldItemInfo.textData then
 		gui.Frame.ItemName.TextColor3 = heldItemInfo.textData.primaryColor or Color3.fromRGB(255, 255, 255)
 	end
 
 	-- // Physical model implementation
-	local model: Model
-	local curInstance = STEALABLE_ITEM_MODELS_FOLDER
-	for _, loc in pairs(heldItemInfo.modelPath or {}) do
-		curInstance = curInstance:FindFirstChild(loc)
-		if not curInstance then
-			warn("[StealingService] Could not find model part at path:", table.concat(heldItemInfo.modelPath or {}, " -> "))
-			return
-		end
-	end
-
 	local yOffset = 2.5
-
-	model = curInstance:Clone() :: Model
+	local model = StealingUtils.getStealableItemModelFromPath(heldItemInfo.modelPath or {}):Clone() :: Model
 	model.Name = "_StealableItemDisplay"
 	model:PivotTo(head.CFrame * CFrame.new(0, yOffset, 0))
 
-	-- Update collisions and physics
+	-- Create handle
+	local handle = Instance.new("Part")
+	handle.Name = "Handle"
+	handle.CFrame = model:GetPivot()
+	handle.Size = Vector3.new(1, 1, 1)
+	handle.Transparency = 1
+	handle.CanCollide = false
+	handle.Parent = model
+	
 	for _, d in model:GetDescendants() do
 		if d:IsA("BasePart") then
 			d.CanCollide = false
 			d.Anchored = false
 			d.Massless = true
+	
+			local weld = Instance.new("WeldConstraint")
+			weld.Part0 = d
+			weld.Part1 = handle
+			weld.Parent = d
 		end
 	end
 
@@ -203,7 +205,7 @@ function StealingService:RefreshHeldItemCharacterDisplay(player: Player)
 
 	local modelAttach = Instance.new("Attachment")
 	modelAttach.Name = "StealableItemModelAttach"
-	modelAttach.Parent = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+	modelAttach.Parent = handle
 
 	local alignPosition = Instance.new("AlignPosition")
 	alignPosition.Attachment0 = modelAttach
@@ -259,31 +261,24 @@ function StealingService:RefreshHeldItemTool(player: Player)
 	end
 
 	-- Create tool
-	local tool = Instance.new("Tool")
+	local tool = SAMPLE_ITEM_TOOL:Clone()
 	tool.Name = heldItemInfo.name
 	CollectionService:AddTag(tool, "_StealableItemTool")
 
-	local model: Model
-	local curInstance = STEALABLE_ITEM_MODELS_FOLDER
-	for _, loc in pairs(heldItemInfo.modelPath or {}) do
-		curInstance = curInstance:FindFirstChild(loc)
-		if not curInstance then
-			warn("[StealingService] Could not find model part at path:", table.concat(heldItemInfo.modelPath or {}, " -> "))
-			return
-		end
-	end
-
-	model = curInstance:Clone() :: Model
+	local model = StealingUtils.getStealableItemModelFromPath(heldItemInfo.modelPath or {}):Clone() :: Model
 	model.Parent = tool
 
 	-- Create handle
-	local handle = Instance.new("Part")
-	handle.Name = "Handle"
-	handle.Size = Vector3.new(1, 1, 1)
+	local handle = tool:FindFirstChild("Handle")
+	if not handle then
+		handle = Instance.new("Part")
+		handle.Name = "Handle"
+		handle.Parent = tool
+	end
 	handle.CFrame = model:GetPivot()
+	handle.Size = Vector3.new(1, 1, 1)
 	handle.Transparency = 1
 	handle.CanCollide = false
-	handle.Parent = tool
 
 	for _, d in model:GetDescendants() do
 		if d:IsA("BasePart") then
@@ -314,12 +309,18 @@ function StealingService:PerformExchange(winner: Player, loser: Player)
 	local loserOldHeldItemId: string = self:GetPlayerHeldItemId(loser)
 	local loserNewHeldItemId: string = loserOldHeldItemId -- set to old as default
 
+	-- Currency info to send to client display
+	local earnedCurrencyAmount: number
+	local earnedCurrencyId: string
+
 	-- Winner logic
 	if winnerTier < loserTier then
 		-- Winner gets loser's item
 		local loserItemId = self:GetPlayerHeldItemId(loser)
 		self:SetPlayerHeldItemId(winner, loserItemId)
 		winnerNewHeldItemId = loserItemId
+
+		-- No currency
 	elseif winnerTier == loserTier then
 		-- Winner gets next tier item (if exists)
 		local targetTier = winnerTier + 1
@@ -327,13 +328,37 @@ function StealingService:PerformExchange(winner: Player, loser: Player)
 		if itemId then
 			self:SetPlayerHeldItemId(winner, itemId)
 			winnerNewHeldItemId = itemId
+
+			-- No currency
 		else
 			-- No higher tier item, do nothing or give reward
 			warn("[StealingService] No higher tier item for tier:", targetTier)
+
+			-- Give currency
+			local currencyId = _deps.Tunables.winCurrencyAmount or "Cash"
+			local amount = _deps.Tunables.winCurrencyAmount or 15
+			local success, breakdown = self.Services.CurrencyService:GiveCurrency(
+				winner, currencyId, amount, true
+			)
+			if success then
+				earnedCurrencyId = currencyId
+				earnedCurrencyAmount = breakdown and breakdown.Total or amount
+			end
 		end
 	else
 		-- Winner already has higher tier, do nothing or give reward
 		warn("[StealingService] Winner already has higher tier:", winnerTier, "vs loser tier:", loserTier)
+
+		-- Give currency
+		local currencyId = _deps.Tunables.winCurrencyAmount or "Cash"
+		local amount = _deps.Tunables.winCurrencyAmount or 15
+		local success, breakdown = self.Services.CurrencyService:GiveCurrency(
+			winner, currencyId, amount, true
+		)
+		if success then
+			earnedCurrencyId = currencyId
+			earnedCurrencyAmount = breakdown and breakdown.Total or amount
+		end
 	end
 
 	-- Loser logic: reset to initial item
@@ -349,6 +374,8 @@ function StealingService:PerformExchange(winner: Player, loser: Player)
 		opponentNewHeldItemId = loserNewHeldItemId,
 		oldHeldItemId = winnerOldHeldItemId,
 		newHeldItemId = winnerNewHeldItemId,
+		earnedCurrencyAmount = earnedCurrencyAmount,
+		earnedCurrencyId = earnedCurrencyId,
 	})
 	self._stealResultRemote:FireClient(loser, {
 		opponentUserId = winner.UserId,
@@ -357,6 +384,8 @@ function StealingService:PerformExchange(winner: Player, loser: Player)
 		opponentNewHeldItemId = winnerNewHeldItemId,
 		oldHeldItemId = loserOldHeldItemId,
 		newHeldItemId = loserNewHeldItemId,
+		earnedCurrencyAmount = earnedCurrencyAmount,
+		earnedCurrencyId = earnedCurrencyId,
 	})
 end
 

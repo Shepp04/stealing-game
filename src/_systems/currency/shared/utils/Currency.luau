@@ -13,10 +13,10 @@ function CurrencyUtil.GetCurrencyText(currencyId: string, amount: number, useCur
 		return tostring(math.floor(amount))
 	end
 
-	if currencyInfo.symbol == "" or currencyInfo.symbol == nil or useCurrencyName then
-		return tostring(math.floor(amount)) .. " " .. currencyInfo.name
+	if not useCurrencyName then
+		return (currencyInfo.symbol or "") .. tostring(math.floor(amount))
 	else
-		return currencyInfo.symbol .. tostring(math.floor(amount))
+		return tostring(math.floor(amount)) .. " " .. currencyInfo.name
 	end
 end
 

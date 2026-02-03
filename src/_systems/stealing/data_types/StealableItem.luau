@@ -56,8 +56,76 @@ local DATA: { [string]: DataEntry } = {
 		},
 	},
 
-	["pizza"] = {
+	["salad"] = {
 		tier = 1,
+		name = "Salad",
+		icon = nil,
+		rarity = "Common",
+		modelPath = { "Salad" }, -- relative to STEALABLE_ITEM_MODELS_FOLDER in StealingService
+		
+		textData = {
+			primaryColor = Color3.fromRGB(20, 198, 0),
+			secondaryColor = Color3.fromRGB(80, 208, 16),
+		},
+		currencyData = {
+			buyPrice = 85,
+			buyCurrencyId = "Cash",
+		},
+	},
+
+	["sandwich"] = {
+		tier = 2,
+		name = "Sandwich",
+		icon = nil,
+		rarity = "Common",
+		modelPath = { "Sandwich" }, -- relative to STEALABLE_ITEM_MODELS_FOLDER in StealingService
+		
+		textData = {
+			primaryColor = Color3.fromRGB(239, 175, 15),
+			secondaryColor = Color3.fromRGB(251, 196, 100),
+		},
+		currencyData = {
+			buyPrice = 195,
+			buyCurrencyId = "Cash",
+		},
+	},
+
+	["bloxiade"] = {
+		tier = 3,
+		name = "Bloxiade",
+		icon = nil,
+		rarity = "Common",
+		modelPath = { "Bloxiade" }, -- relative to STEALABLE_ITEM_MODELS_FOLDER in StealingService
+		
+		textData = {
+			primaryColor = Color3.fromRGB(159, 130, 255),
+			secondaryColor = Color3.fromRGB(159, 130, 255),
+		},
+		currencyData = {
+			buyPrice = 465,
+			buyCurrencyId = "Cash",
+		},
+	},
+
+	["bloxy_cola"] = {
+		tier = 4,
+		name = "Bloxy Cola",
+		icon = nil,
+		rarity = "Common",
+		modelPath = { "BloxyCola" }, -- relative to STEALABLE_ITEM_MODELS_FOLDER in StealingService
+		
+		textData = {
+			primaryColor = Color3.fromRGB(153, 46, 0),
+			secondaryColor = Color3.fromRGB(153, 46, 0),
+		},
+		currencyData = {
+			buyPrice = 995,
+			buyCurrencyId = "Cash",
+		},
+	},
+
+	["pizza"] = {
+		tier = 5,
 		name = "Pizza",
 		icon = nil,
 		rarity = "Common",
@@ -68,13 +136,30 @@ local DATA: { [string]: DataEntry } = {
 			secondaryColor = Color3.fromRGB(210, 180, 140),
 		},
 		currencyData = {
-			buyPrice = 0, -- 100,
+			buyPrice = 1980,
+			buyCurrencyId = "Cash",
+		},
+	},
+
+	["cake_slice"] = {
+		tier = 6,
+		name = "Cake Slice",
+		icon = nil,
+		rarity = "Common",
+		modelPath = { "CakeSlice" }, -- relative to STEALABLE_ITEM_MODELS_FOLDER in StealingService
+		
+		textData = {
+			primaryColor = Color3.fromRGB(255, 228, 74),
+			secondaryColor = Color3.fromRGB(255, 228, 74),
+		},
+		currencyData = {
+			buyPrice = 4864,
 			buyCurrencyId = "Cash",
 		},
 	},
 
 	["burger"] = {
-		tier = 2,
+		tier = 7,
 		name = "Burger",
 		icon = nil,
 		rarity = "Common",
@@ -85,7 +170,24 @@ local DATA: { [string]: DataEntry } = {
 			secondaryColor = Color3.fromRGB(210, 180, 140),
 		},
 		currencyData = {
-			buyPrice = 350,
+			buyPrice = 9672,
+			buyCurrencyId = "Cash",
+		},
+	},
+
+	["cake"] = {
+		tier = 8,
+		name = "Cake",
+		icon = nil,
+		rarity = "Common",
+		modelPath = { "Cake" }, -- relative to STEALABLE_ITEM_MODELS_FOLDER in StealingService
+		
+		textData = {
+			primaryColor = Color3.fromRGB(255, 255, 255),
+			secondaryColor = Color3.fromRGB(242, 222, 195),
+		},
+		currencyData = {
+			buyPrice = 19248,
 			buyCurrencyId = "Cash",
 		},
 	},

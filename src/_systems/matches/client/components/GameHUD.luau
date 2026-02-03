@@ -188,7 +188,7 @@ function GameHUD:SetHeading(text: string?, color: Color3?, duration: number?)
 
 		-- Clear after duration
 		local currentToken = self._currentHeadingToken
-		task.delay(duration or 2.0, function()
+		task.delay(duration or 5.0, function()
 			if currentToken == self._currentHeadingToken then
 				self:SetHeading(nil)
 			end
@@ -208,7 +208,7 @@ function GameHUD:SetSubheading(text: string?, color: Color3?, duration: number?)
 
 		-- Clear after duration
 		local currentToken = self._currentSubheadingToken
-		task.delay(duration or 3.0, function()
+		task.delay(duration or 5.0, function()
 			if currentToken == self._currentSubheadingToken then
 				self:SetSubheading(nil)
 			end
@@ -293,8 +293,55 @@ function GameHUD:RevealItemMask(itemModel: Model, contentType: ItemContent, dura
 	highlight.OutlineTransparency = 1
 	highlight.Parent = itemModel
 
+	-- BillboardGui label: "Bomb" or "?" with CanvasGroup for fade in/out
+	local attachPart = itemModel.PrimaryPart or itemModel:FindFirstChildWhichIsA("BasePart")
+	local labelGui: BillboardGui? = nil
+	local canvasGroup: CanvasGroup? = nil
+	if attachPart then
+		labelGui = Instance.new("BillboardGui")
+		labelGui.Name = "RevealLabel"
+		labelGui.Adornee = attachPart
+		labelGui.Size = UDim2.fromScale(0.5, 0.5)
+		labelGui.StudsOffset = Vector3.new(0, 0.50, 0)
+		labelGui.AlwaysOnTop = true
+		labelGui.Parent = itemModel
+
+		canvasGroup = Instance.new("CanvasGroup")
+		canvasGroup.Name = "Content"
+		canvasGroup.BackgroundTransparency = 1
+		canvasGroup.Size = UDim2.fromScale(1, 1)
+		canvasGroup.GroupTransparency = 1
+		canvasGroup.Parent = labelGui
+
+		if contentType == "Lose" then
+			local imageLabel = Instance.new("ImageLabel")
+			imageLabel.Size = UDim2.fromScale(1, 1)
+			imageLabel.Image = "rbxassetid://132041126866075"
+			imageLabel.BackgroundTransparency = 1
+			imageLabel.Parent = canvasGroup
+		else
+			local label = Instance.new("TextLabel")
+			label.Size = UDim2.fromScale(1, 1)
+			label.BackgroundTransparency = 1
+			label.Font = Enum.Font.Highway
+			label.TextScaled = true
+			label.Text = "?"
+			label.TextColor3 = if contentType == "Lose" then Color3.fromRGB(255, 80, 80) else Color3.fromRGB(80, 255, 80)
+			label.Parent = canvasGroup
+
+			local stroke = Instance.new("UIStroke")
+			stroke.Thickness = 2
+			stroke.Color = Color3.new(0, 0, 0)
+			stroke.Parent = label
+		end
+	end
+
 	-- Tween in the highlight
 	TweenService:Create(highlight, TweenInfo.new(0.5), { FillTransparency = 0, OutlineTransparency = 0 }):Play()
+	-- Fade in the label
+	if canvasGroup then
+		TweenService:Create(canvasGroup, TweenInfo.new(0.35), { GroupTransparency = 0 }):Play()
+	end
 	task.wait(duration or 1.0)
 
 	-- Tween out the highlight
@@ -302,6 +349,14 @@ function GameHUD:RevealItemMask(itemModel: Model, contentType: ItemContent, dura
 	tween:Play()
 	tween.Completed:Wait()
 	highlight:Destroy()
+	if labelGui and labelGui.Parent then
+		if canvasGroup then
+			local fadeOut = TweenService:Create(canvasGroup, TweenInfo.new(0.3), { GroupTransparency = 1 })
+			fadeOut:Play()
+			fadeOut.Completed:Wait()
+		end
+		labelGui:Destroy()
+	end
 end
 
 function GameHUD:SetVisible(visible: boolean)

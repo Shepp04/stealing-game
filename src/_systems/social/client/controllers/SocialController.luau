@@ -295,14 +295,17 @@ function SocialController:Init(deps: Deps)
 	local SocialGui = GuiRefs.GetScreenGui(PlayerGui, "SocialGui")
 
 	-- // Give the player a group reward gui
-	local GroupRewardGui = GroupRewardGuiTemplate:Clone() :: ScreenGui
-	GroupRewardGui.Enabled = true
-	GroupRewardGui.ResetOnSpawn = false
-	GroupRewardGui.Parent = PlayerGui
+	local GroupRewardGui = PlayerGui:FindFirstChild("GroupRewardGui")
+	if not GroupRewardGui then
+		GroupRewardGui = GroupRewardGuiTemplate:Clone() :: ScreenGui
+		GroupRewardGui.ResetOnSpawn = false
+		GroupRewardGui.Parent = PlayerGui
+	end
 
 	self._claimGroupRewardButton = GuiRefs.Get(GroupRewardGui, { "GroupReward", "Frame", "Container", "Bottom", "ClaimButton", "Select" }) :: GuiButton
 	GroupRewardGui.GroupReward.Visible = false
-
+	GroupRewardGui.Enabled = true
+	
 	-- // Create a Friend Alert
 	self._friendAlert = FriendAlertComponent.new(_deps, {
 		rootFrame = GuiRefs.Get(SocialGui, { "FriendAlert" }) :: Frame,

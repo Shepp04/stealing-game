@@ -5,6 +5,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 
 -- // Utils
 local GuiRefs = require(script.Parent.Parent.Utils:WaitForChild("GuiRefs"))
@@ -184,6 +185,7 @@ function MatchController:HandleGameStateUpdate(kind: GameBroadcastState, ...: an
 	end
 
 	if kind == "YourResult" then
+		self:_destroyDefenderWinningMarker()
 		local result: string = (... and (...).result) or "Empty"
 		if result == "Win" then
 			self._gameHUD:SetHeading("STEAL!", Color3.fromRGB(0, 255, 0))
@@ -199,6 +201,7 @@ function MatchController:HandleGameStateUpdate(kind: GameBroadcastState, ...: an
 	end
 
 	if kind == "TheirResult" then
+		self:_destroyDefenderWinningMarker()
 		local result: string = (... and (...).result) or "Empty"
 		if result == "Win" then
 			self._gameHUD:SetHeading("STOLEN!", Color3.fromRGB(255, 0, 0))
@@ -257,6 +260,7 @@ end
 
 function MatchController:EndMatch()
 	self._matchRunning = false
+	self:_destroyDefenderWinningMarker()
 
 	-- Hide the HUD
 	if self._gameHUD then
@@ -298,8 +302,17 @@ function MatchController:_getBoardModels(boardUserId: number): { Model }
 			table.insert(models, inst)
 		end
 	end
-	print("[MatchController] _getBoardModels: found", #models, "models for boardUserId", boardUserId, models)
 	return models
+end
+
+function MatchController:_getItemModelByIndex(boardUserId: number, itemIndex: number): Model?
+	local models = self:_getBoardModels(boardUserId)
+	for _, model in ipairs(models) do
+		if model:GetAttribute("ItemIndex") == itemIndex then
+			return model
+		end
+	end
+	return nil
 end
 
 -- ===== Round Handlers ===== --
@@ -381,9 +394,8 @@ function MatchController:_onTurn(payload: any)
 			self._gameHUD:SetHeading("HIDE YOUR LUNCH!")
 			self._gameHUD:SetSubheading("Tap a cup")
 		elseif waitingForDefender then
-			-- Attacker: opponent is choosing
-			self._gameHUD:SetHeading("Opponent is choosing where to hide their lunch...")
-			self._gameHUD:SetSubheading(nil)
+			-- Attacker: message is set by server (Message broadcast with defender's display name)
+			-- No need to set heading here; server sends "Message" with full text
 		end
 	elseif phase == "Shuffle" then
 		-- If local player is attacker, this is the “watch + memorise” moment
@@ -479,17 +491,71 @@ function MatchController:_onBoardUpdate(payload: any)
 	end
 end
 
+function MatchController:_destroyDefenderWinningMarker()
+	local gui = self._defenderWinningMarkerGui
+	self._defenderWinningMarkerGui = nil
+	if not gui or not gui.Parent then return end
+
+	local canvasGroup = gui:FindFirstChild("Content") :: CanvasGroup?
+	if canvasGroup then
+		local fadeOut = TweenService:Create(canvasGroup, TweenInfo.new(0.3), { GroupTransparency = 1 })
+		fadeOut:Play()
+		fadeOut.Completed:Connect(function()
+			if gui.Parent then
+				gui:Destroy()
+			end
+		end)
+	else
+		gui:Destroy()
+	end
+end
+
 function MatchController:_onAutoAction(payload: any)
 	-- payload example:
 	-- { kind="SetWinningItem"|"SelectItem"|"RevealItem", userId=?, itemIndex=?, content=? }
 	if typeof(payload) ~= "table" then return end
 
-	-- STUB: for debugging + future UX.
-	-- For example, if server auto-picked, you can show a toast:
 	if payload.kind == "SetWinningItem" then
-		-- only show to the player whose item was set
 		if payload.userId == self._localUserId then
-			-- self._gameHUD:SetSubheading("Auto-picked a hiding spot")
+			self:_destroyDefenderWinningMarker()
+			local itemModel = self:_getItemModelByIndex(self._localUserId, payload.itemIndex)
+			if itemModel then
+				local attachPart = itemModel.PrimaryPart or itemModel:FindFirstChildWhichIsA("BasePart")
+				if attachPart then
+					local gui = Instance.new("BillboardGui")
+					gui.Name = "_DefenderWinningMarker"
+					gui.Adornee = attachPart
+					gui.Size = UDim2.fromScale(0.8, 0.8)
+					gui.StudsOffset = Vector3.new(0, 0, 0)
+					gui.AlwaysOnTop = true
+					gui.Parent = itemModel
+
+					local canvasGroup = Instance.new("CanvasGroup")
+					canvasGroup.Name = "Content"
+					canvasGroup.BackgroundTransparency = 1
+					canvasGroup.Size = UDim2.fromScale(1, 1)
+					canvasGroup.GroupTransparency = 1
+					canvasGroup.Parent = gui
+
+					local label = Instance.new("TextLabel")
+					label.Size = UDim2.fromScale(1, 1)
+					label.BackgroundTransparency = 1
+					label.Font = Enum.Font.Highway
+					label.TextScaled = true
+					label.Text = "X"
+					label.TextColor3 = Color3.fromRGB(255, 255, 255)
+					label.Parent = canvasGroup
+
+					local stroke = Instance.new("UIStroke")
+					stroke.Thickness = 2
+					stroke.Color = Color3.new(0.2, 0.2, 0.2)
+					stroke.Parent = label
+
+					self._defenderWinningMarkerGui = gui
+					-- Fade in
+					TweenService:Create(canvasGroup, TweenInfo.new(0.35), { GroupTransparency = 0 }):Play()
+				end
+			end
 		end
 	elseif payload.kind == "SelectItem" then
 		if payload.userId == self._localUserId then
@@ -531,6 +597,9 @@ function MatchController:Init(deps: Deps)
 	-- // Reveal state
 	self._revealActive = false
 	self._lastReveal = nil :: any
+
+	-- // Defender winning-item marker (BillboardGui "X"), destroyed when result is shown
+	self._defenderWinningMarkerGui = nil :: Instance?
 
 	-- // Get remotes
 	self._gameStateRemote = _deps.SharedPackages.Remotes:GetRemote("RemoteEvent", "GameState") :: RemoteEvent

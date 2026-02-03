@@ -9,6 +9,7 @@ local TweenService = game:GetService("TweenService")
 -- // Utils
 local GuiRefs = require(script.Parent.Parent.Utils.GuiRefs)
 local StealingUtils = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Utils"):WaitForChild("Stealing"))
+local CurrencyUtils = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Utils"):WaitForChild("Currency"))
 
 -- // Custom types
 
@@ -96,9 +97,20 @@ function HeldItemUpgradeStand:SetDisplay(targetTier: number)
 	end
 
 	local price = currencyData.buyPrice or 0
-	local currencyId = currencyData.currencyId or 0
+	local currencyId = currencyData.currencyId or "Cash"
+	local currencyInfo = _deps.GameData.Get("Currency", currencyId)
 
-	self._priceLabel.Text = tostring(price)
+	self._headingLabel.Text = "UPGRADE"
+
+	if currencyInfo and currencyInfo.icon then
+		self._currencyIcon.Image = currencyInfo.icon
+		self._currencyIcon.Visible = true
+		self._priceLabel.Text = CurrencyUtils.GetCurrencyText(currencyId, price, false)
+	else
+		self._currencyIcon.Image = ""
+		self._currencyIcon.Visible = false
+		self._priceLabel.Text = CurrencyUtils.GetCurrencyText(currencyId, price, true)
+	end
 end
 
 function HeldItemUpgradeStand:ClearDisplay(msg: string?)

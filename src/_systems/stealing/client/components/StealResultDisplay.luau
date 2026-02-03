@@ -3,6 +3,7 @@
 
 -- // Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StarterGui = game:GetService("StarterGui")
 local TweenService = game:GetService("TweenService")
 
 -- // Utils
@@ -34,8 +35,8 @@ export type StealResultDisplayAPI = {
 	Init: (self: StealResultDisplayAPI) -> (),
 	Destroy: (self: StealResultDisplayAPI) -> (),
 
-	SetHeading: (self: StealResultDisplayAPI, text: string) -> (),
-	SetSubheading: (self: StealResultDisplayAPI, text: string) -> (),
+	SetHeading: (self: StealResultDisplayAPI, text: string?) -> (),
+	SetSubheading: (self: StealResultDisplayAPI, text: string?) -> (),
 	SetCloseButtonText: (self: StealResultDisplayAPI, text: string) -> (),
 	SetCloseButtonColor: (self: StealResultDisplayAPI, color: Color3) -> (),
 	SetRestoreButtonVisible: (self: StealResultDisplayAPI, visible: boolean) -> (),
@@ -91,12 +92,12 @@ end
 
 -- ========== Public API ========== --
 
-function StealResultDisplay:SetHeading(text: string)
-	self._heading.Text = text
+function StealResultDisplay:SetHeading(text: string?)
+	self._heading.Text = text or ""
 end
 
-function StealResultDisplay:SetSubheading(text: string)
-	self._subheading.Text = text
+function StealResultDisplay:SetSubheading(text: string?)
+	self._subheading.Text = text or ""
 end
 
 function StealResultDisplay:SetCloseButtonText(text: string)
@@ -115,17 +116,20 @@ function StealResultDisplay:SetCloseButtonColor(color: Color3)
 end
 
 function StealResultDisplay:SetRestoreButtonVisible(visible: boolean)
+	-- == Temporarily disabled == --
+	if true then self._restoreButton.container.Visible = false; return end
 	self._restoreButton.container.Visible = visible
 end
 
 function StealResultDisplay:SetVisible(visible: boolean)
 	self.root.Enabled = visible
+	self:_toggleBackpack(not visible)
 end
 
 -- ========== Internal ========== --
 
-function StealResultDisplay:_internalMethod()
-	-- Example
+function StealResultDisplay:_toggleBackpack(visible: boolean)
+	StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Backpack, visible)
 end
 
 -- ========== Life Cycle ========== --
@@ -133,6 +137,12 @@ end
 function StealResultDisplay:Init()
 	if self._inited then return end
 	self._inited = true
+
+	-- // Connect button events
+	table.insert(self._conns, self._closeButton.select.MouseButton1Click:Connect(function()
+		-- Hide
+		self:SetVisible(false)
+	end))
 
 	-- // Hide by default
 	self:SetVisible(false)

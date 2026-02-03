@@ -57,16 +57,16 @@ local PUBLIC_FIELD_WHITELIST = {
 local DATA: { [string]: DataEntry } = {
 	Cash = {
 		name = "Cash",
-		symbol = "$",
-		icon = "rbxassetid://106727718665166",
+		symbol = nil,
+		icon = "rbxassetid://97052566299955", -- "rbxassetid://106727718665166",
 		collectSoundId = 7112275565,
 		spendSoundId = 81816893340749,
 		defaultValue = 0,
 		earnedPromptEnabled = true,
 		rebirthMultiplier = nil,
-		useLeaderstats = true,
+		useLeaderstats = false,
 		useFriendsBoost = true,
-		leaderstatsPosition = 3,
+		leaderstatsPosition = nil,
 		friendBoostMultiplier = 1.1,
 		collectables = nil,
 
@@ -87,33 +87,66 @@ local DATA: { [string]: DataEntry } = {
 		end,
 	},
 
-	Kills = {
-		name = "Kills",
+	Wins = {
+		name = "Wins",
 		symbol = nil,
-		icon = "rbxassetid://106134811949520",
-		collectSoundId = nil,
-		spendSoundId = nil,
+		icon = "rbxassetid://106727718665166",
+		collectSoundId = 7112275565,
+		spendSoundId = 81816893340749,
 		defaultValue = 0,
-		earnedPromptEnabled = false,
+		earnedPromptEnabled = true,
 		rebirthMultiplier = nil,
 		useLeaderstats = true,
+		useFriendsBoost = false,
 		leaderstatsPosition = 1,
 		friendBoostMultiplier = nil,
 		collectables = nil,
 
 		Get = function(profile: PlayerProfile): number
-			return profile.Data.Stats and profile.Data.Stats.Kills or 0
+			return profile.Data.Stats and profile.Data.Stats.Wins or 0
 		end,
 
 		Set = function(player: Player, profile: PlayerProfile, amount: number)
 			if profile.Data.Stats then
-				profile.Data.Stats.Kills = amount
+				profile.Data.Stats.Wins = amount
 			end
 		end,
-
+		
 		Update = function(player: Player, profile: PlayerProfile, amount: number)
-			if profile.Data.Stats and profile.Data.Stats.Kills then
-				profile.Data.Stats.Kills += amount
+			if profile.Data.Stats and profile.Data.Stats.Wins then
+				profile.Data.Stats.Wins += amount
+			end
+		end,
+	},
+
+	Streak = {
+		name = "Streak",
+		symbol = nil,
+		icon = "rbxassetid://106727718665166",
+		collectSoundId = 7112275565,
+		spendSoundId = 81816893340749,
+		defaultValue = 0,
+		earnedPromptEnabled = true,
+		rebirthMultiplier = nil,
+		useLeaderstats = true,
+		useFriendsBoost = false,
+		leaderstatsPosition = 2,
+		friendBoostMultiplier = nil,
+		collectables = nil,
+
+		Get = function(profile: PlayerProfile): number
+			return profile.Data.Stats and profile.Data.Stats.Streak or 0
+		end,
+
+		Set = function(player: Player, profile: PlayerProfile, amount: number)
+			if profile.Data.Stats then
+				profile.Data.Stats.Streak = amount
+			end
+		end,
+		
+		Update = function(player: Player, profile: PlayerProfile, amount: number)
+			if profile.Data.Stats and profile.Data.Stats.Streak then
+				profile.Data.Stats.Streak += amount
 			end
 		end,
 	},

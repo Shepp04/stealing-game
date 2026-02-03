@@ -1,6 +1,11 @@
 --!strict
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
 -- Stealing (Util)
 export type StealingAPI = {}
+
+-- // Constants
+local STEALABLE_ITEM_MODELS_FOLDER = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Models"):WaitForChild("StealableItems") :: Folder
 
 local Stealing = {}
 
@@ -18,6 +23,18 @@ function Stealing.getStealableItemsByTier(items: { [string]: any }): { [number]:
         itemsByTier[tier] = itemInfo
     end
     return itemsByTier
+end
+
+function Stealing.getStealableItemModelFromPath(modelPath: { string }): Model?
+    local curInstance = STEALABLE_ITEM_MODELS_FOLDER
+	for _, loc in pairs(modelPath) do
+		curInstance = curInstance:FindFirstChild(loc)
+		if not curInstance then
+			warn("[StealingService] Could not find model part at path:", table.concat(modelPath, " -> "))
+			return nil
+		end
+	end
+    return curInstance
 end
 
 return Stealing :: StealingAPI

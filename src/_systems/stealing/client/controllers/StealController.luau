@@ -9,10 +9,12 @@ local RunService = game:GetService("RunService")
 
 -- // Utils
 local GuiRefs = require(script.Parent.Parent.Utils:WaitForChild("GuiRefs"))
+local CurrencyUtils = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Utils"):WaitForChild("Currency"))
 
 -- // Components
 local StealResultDisplay = require(script.Parent.Parent.Components:WaitForChild("StealResultDisplay"))
 local HeldItemUpgradeStand = require(script.Parent.Parent.Components:WaitForChild("HeldItemUpgradeStand"))
+local StealableItemsIndexStand = require(script.Parent.Parent.Components:WaitForChild("StealableItemsIndexStand"))
 
 -- // Types (custom)
 type StealResult = {
@@ -21,7 +23,9 @@ type StealResult = {
 	opponentOldHeldItemId: string,
 	opponentNewHeldItemId: string,
 	oldHeldItemId: string,
-	newHeldItemId: string
+	newHeldItemId: string,
+	currencyEarnedAmount: number,
+	currencyEarnedId: string,
 }
 
 -- // Types (generated)
@@ -79,6 +83,8 @@ function StealController:_onStealResultReceived(result: StealResult)
 	local opponentNewHeldItemId = result.opponentNewHeldItemId
 	local oldHeldItemId = result.oldHeldItemId
 	local newHeldItemId = result.newHeldItemId
+	local currencyEarnedAmount = result.currencyEarnedAmount
+	local currencyEarnedId = result.currencyEarnedId
 
 	-- Get item info
 	local opponentOldHeldItemInfo = _deps.GameData.Get("StealableItem", opponentOldHeldItemId)
@@ -94,13 +100,19 @@ function StealController:_onStealResultReceived(result: StealResult)
 		self._stealResultDisplay:SetCloseButtonText("Take it")
 		self._stealResultDisplay:SetCloseButtonColor(Color3.fromRGB(46, 255, 0))
 		self._stealResultDisplay:SetRestoreButtonVisible(false)
+		self._stealResultDisplay:SetSubheading(nil)
+
+		if currencyEarnedAmount and currencyEarnedId then
+			local amountText = CurrencyUtils.GetCurrencyText(currencyEarnedId, currencyEarnedAmount, true)
+			self._stealResultDisplay:SetSubheading("It was converted to " .. (amountText or currencyEarnedId))
+		end
 	else
-		self._stealResultDisplay:SetHeading("They stole your " .. oldHeldItemInfo.name)
+		self._stealResultDisplay:SetHeading("THEY STOLE YOUR " .. string.upper(oldHeldItemInfo.name) .. "!")
 		self._stealResultDisplay:SetCloseButtonText("Ok :(")
 		self._stealResultDisplay:SetCloseButtonColor(Color3.fromRGB(246, 16, 0))
 		self._stealResultDisplay:SetRestoreButtonVisible(true)
+		self._stealResultDisplay:SetSubheading("You are now " .. newHeldItemInfo.name .. " level")
 	end
-	self._stealResultDisplay:SetSubheading("You are now " .. newHeldItemInfo.name .. " level")
 
 	-- Show
 	self._stealResultDisplay:SetVisible(true)
@@ -158,6 +170,9 @@ function StealController:Init(deps: Deps)
 	-- // Initialise upgrade stand dict
 	self._upgradeStands = {}
 
+	-- // Initialise item index stand dict
+	self._indexStands = {}
+
 	-- // Get remotes
 	self._stealResultRemote = _deps.SharedPackages.Remotes:GetRemote("RemoteEvent", "StealResult") :: RemoteEvent
 end
@@ -205,6 +220,39 @@ function StealController:Start()
 		if self._upgradeStands[v] then
 			self._upgradeStands[v]:Destroy()
 			self._upgradeStands[v] = nil
+		end
+	end))
+
+	-- // Setup index stand(s)
+	local numStealableItems = 0
+	for id, info in _deps.GameData.GetDataType("StealableItem") do
+		numStealableItems += 1
+	end
+	
+	for _, v in CollectionService:GetTagged("StealableItemsIndexStand") do
+		local object = StealableItemsIndexStand.new(_deps, {
+			model = v,
+			base = v:WaitForChild("Base"),
+			numItems = numStealableItems,
+		})
+		object:Init()
+		self._indexStands[v] = object
+	end
+
+	table.insert(self._conns, CollectionService:GetInstanceAddedSignal("StealableItemsIndexStand"):Connect(function(v: Instance)
+		local object = StealableItemsIndexStand.new(_deps, {
+			model = v,
+			base = v:WaitForChild("Base"),
+			numItems = numStealableItems,
+		})
+		object:Init()
+		self._indexStands[v] = object
+	end))
+
+	table.insert(self._conns, CollectionService:GetInstanceRemovedSignal("StealableItemsIndexStand"):Connect(function(v: Instance)
+		if self._indexStands[v] then
+			self._indexStands[v]:Destroy()
+			self._indexStands[v] = nil
 		end
 	end))
 

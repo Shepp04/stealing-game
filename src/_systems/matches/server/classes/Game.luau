@@ -90,6 +90,7 @@ local _deps: Deps?
 
 -- // Constants
 local SAMPLE_ITEM_MODEL = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Models"):WaitForChild("Items"):WaitForChild("SampleItem") :: Model
+local EXPLODE_ANIMATION = Instance.new("Animation"); EXPLODE_ANIMATION.AnimationId = "rbxassetid://126527283467855"
 
 -- ========== Helpers ========== --
 
@@ -380,6 +381,19 @@ function Game:_beginTurn(attackerUserId: number, defenderUserId: number)
 				shakeEnabled = false,
 				waitingForDefender = true,
 			})
+		end
+	end
+
+	-- Attacker sees "[Defender name] is choosing where to hide..."
+	local defenderPlayer = Players:GetPlayerByUserId(defenderUserId)
+	local defenderDisplayName = defenderPlayer and defenderPlayer.DisplayName or "Opponent"
+	for _, plr in ipairs(self.ctx.getPlayers()) do
+		if plr.UserId == attackerUserId then
+			self.ctx.send(plr, "Message", {
+				heading = defenderDisplayName .. " is choosing where to hide...",
+				subheading = nil,
+			})
+			break
 		end
 	end
 
@@ -741,7 +755,8 @@ function Game:_onLosingItemPicked(attackerUserId: number, defenderUserId: number
 	local attacker = Players:GetPlayerByUserId(attackerUserId)
 	local attackerChar = attacker and attacker.Character
 	local attackerRoot = attackerChar and attackerChar:FindFirstChild("HumanoidRootPart") :: BasePart?
-	if attackerRoot then
+	local attackerHuman = attackerChar and attackerChar:FindFirstChildOfClass("Humanoid") :: Humanoid?
+	if attackerRoot and attackerHuman then
 		self.ctx.broadcast("Camera", {
 			cframe = CFrame.new(
 				attackerRoot.Position + attackerRoot.CFrame.LookVector * 5 + Vector3.new(0, 2, 0),
@@ -761,7 +776,19 @@ function Game:_onLosingItemPicked(attackerUserId: number, defenderUserId: number
 
 		_deps.SharedPackages.Sounds:PlaySound("Explode", attackerRoot.Position)
 
-		task.wait(0.5)
+		local animator = attackerHuman:FindFirstChildOfClass("Animator")
+		if not animator then
+			animator = Instance.new("Animator")
+			animator.Parent = attackerHuman
+		end
+		local animTrack = animator:LoadAnimation(EXPLODE_ANIMATION) -- explosion animation
+		animTrack:Play()
+
+		task.delay(1.5, function()
+			animTrack:Stop()
+		end)
+
+		task.wait(1.5)
 	end
 end
 

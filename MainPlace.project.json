@@ -252,6 +252,9 @@
             },
             "StealResultDisplay": {
               "$path": "src/_systems/stealing/client/components/StealResultDisplay.luau"
+            },
+            "StealableItemsIndexStand": {
+              "$path": "src/_systems/stealing/client/components/StealableItemsIndexStand.luau"
             }
           },
           "Utils": {
