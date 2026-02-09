@@ -673,7 +673,7 @@ function MatchTable:_startNextRound(starterUserId: number?)
 end
 
 
-function MatchTable:_onRoundEnded(winner: Player?)
+function MatchTable:_onRoundEnded(winner: Player?, lastTurnUserId: Player?)
 	-- If someone left mid-round, EndGame(nil) may be called elsewhere; guard
 	if self.state.status ~= "Running" then return end
 
@@ -706,15 +706,15 @@ function MatchTable:_onRoundEnded(winner: Player?)
 		if self.state.status ~= "Running" then return end
 		if #self.state.players < self._minPlayers then return end
 
-		-- Start with the previous round's loser starting first
-		local loserUserId: number? = nil
+		-- Start another game switching the start player
+		local otherUserId: number? = nil
 		for _, plr in ipairs(self.state.players) do
-			if plr ~= winner then
-				loserUserId = plr.UserId
+			if plr.UserId ~= lastTurnUserId then
+				otherUserId = plr.UserId
 				break
 			end
 		end
-		self:_startNextRound(loserUserId)
+		self:_startNextRound(otherUserId)
 	end)
 end
 

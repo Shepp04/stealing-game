@@ -129,7 +129,7 @@ function GameInput:ClearItemObjects()
 end
 
 function GameInput:CreateItemObjects(itemModels: { Model }): { ItemObject }
-	print("GameInput:CreateItemObjects - creating", #itemModels, "item objects", itemModels)
+	print("[GameInput] CreateItemObjects - creating", #itemModels, "item objects", itemModels)
 	-- Clear existing
 	self:ClearItemObjects()
 
@@ -259,11 +259,10 @@ end
 function GameInput:_onItemClicked(itemObject: ItemObject, player: Player)
 	if not self._inputEnabled then warn("Input is disabled") return end
 	if not self._clickAction then warn("No click action set") return end
-
-	local idx = itemObject.model:GetAttribute("ItemIndex")
-	if typeof(idx) ~= "number" then warn("Invalid ItemIndex attribute") return end
-
-	self.onAction(self._clickAction, { itemIndex = idx })
+	
+	local posIndex = itemObject.model:GetAttribute("PosIndex")
+	if typeof(posIndex) ~= "number" then warn("Invalid PosIndex attribute") return end
+	self.onAction(self._clickAction, { posIndex = posIndex })
 end
 
 function GameInput:_onShuffleButtonDown()

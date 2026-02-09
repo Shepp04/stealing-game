@@ -7,6 +7,7 @@ local StarterPlayer = game:GetService("StarterPlayer")
 export type CurrencyDropsController = typeof(require(StarterPlayer.StarterPlayerScripts.Client.Controllers.CurrencyDropsController))
 export type MatchController = typeof(require(StarterPlayer.StarterPlayerScripts.Client.Controllers.MatchController))
 export type MenuController = typeof(require(StarterPlayer.StarterPlayerScripts.Client.Controllers.MenuController))
+export type MonetisationController = typeof(require(StarterPlayer.StarterPlayerScripts.Client.Controllers.MonetisationController))
 export type SocialController = typeof(require(StarterPlayer.StarterPlayerScripts.Client.Controllers.SocialController))
 export type StealController = typeof(require(StarterPlayer.StarterPlayerScripts.Client.Controllers.StealController))
 export type TransitionController = typeof(require(StarterPlayer.StarterPlayerScripts.Client.Controllers.TransitionController))
@@ -17,6 +18,7 @@ export type Registry = {
 	CurrencyDropsController: CurrencyDropsController,
 	MatchController: MatchController,
 	MenuController: MenuController,
+	MonetisationController: MonetisationController,
 	SocialController: SocialController,
 	StealController: StealController,
 	TransitionController: TransitionController,

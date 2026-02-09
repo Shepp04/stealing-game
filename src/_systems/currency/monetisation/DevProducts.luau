@@ -37,74 +37,64 @@ local Handlers: { [string]: Handler } = {
 local defs: { devProducts: { DevProductPrivate } } = {
     devProducts = {
         CoinPack1 = {
-            id = 3478507776,
+            id = 3531894489,
             name = "Coin Pack 1",
             category = "Currency",
             description = nil, -- hydrated later
             priceInRobux = nil, -- hydrated later
             iconImageAssetId = nil, -- hydrated later
             handler = Handlers.CurrencyDevProduct,
-            params = { value = 120, currencyId = "Coins" },
+            params = { value = 125, currencyId = "Cash" },
         },
         CoinPack2 = {
-            id = 3478507887,
+            id = 3531894836,
             name = "Coin Pack 2",
             category = "Currency",
             description = nil, -- hydrated later
             priceInRobux = nil, -- hydrated later
             iconImageAssetId = nil, -- hydrated later
             handler = Handlers.CurrencyDevProduct,
-            params = { value = 960, currencyId = "Coins" },
+            params = { value = 500, currencyId = "Cash" },
         },
         CoinPack3 = {
-            id = 3478507963,
+            id = 3531895156,
             name = "Coin Pack 3",
             category = "Currency",
             description = nil, -- hydrated later
             priceInRobux = nil, -- hydrated later
             iconImageAssetId = nil, -- hydrated later
             handler = Handlers.CurrencyDevProduct,
-            params = { value = 2100, currencyId = "Coins" },
+            params = { value = 960, currencyId = "Cash" },
         },
         CoinPack4 = {
-            id = 3478508048,
+            id = 3531895546,
             name = "Coin Pack 4",
             category = "Currency",
             description = nil, -- hydrated later
             priceInRobux = nil, -- hydrated later
             iconImageAssetId = nil, -- hydrated later
             handler = Handlers.CurrencyDevProduct,
-            params = { value = 4500, currencyId = "Coins" },
+            params = { value = 2100, currencyId = "Cash" },
         },
         CoinPack5 = {
-            id = 3478508114,
+            id = 3531895836,
             name = "Coin Pack 5",
             category = "Currency",
             description = nil, -- hydrated later
             priceInRobux = nil, -- hydrated later
             iconImageAssetId = nil, -- hydrated later
             handler = Handlers.CurrencyDevProduct,
-            params = { value = 12000, currencyId = "Coins" },
+            params = { value = 4500, currencyId = "Cash" },
         },
         CoinPack6 = {
-            id = 3478508187,
+            id = 3531896224,
             name = "Coin Pack 6",
             category = "Currency",
             description = nil, -- hydrated later
             priceInRobux = nil, -- hydrated later
             iconImageAssetId = nil, -- hydrated later
             handler = Handlers.CurrencyDevProduct,
-            params = { value = 30000, currencyId = "Coins" },
-        },
-        CoinPack7 = {
-            id = 3478508251,
-            name = "Coin Pack 7",
-            category = "Currency",
-            description = nil, -- hydrated later
-            priceInRobux = nil, -- hydrated later
-            iconImageAssetId = nil, -- hydrated later
-            handler = Handlers.CurrencyDevProduct,
-            params = { value = 120000, currencyId = "Coins" },
+            params = { value = 12000, currencyId = "Cash" },
         },
 	},
 }

@@ -82,7 +82,7 @@ function FriendAlert:Display(friendUserId: number)
 	-- Get friend's info
 	local ok, result = pcall(function()
 		local name = Players:GetNameFromUserIdAsync(friendUserId)
-		local imageId = Players:GetUserThumbnailAsync(friendUserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
+		local imageId = Players:GetUserThumbnailAsync(friendUserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
 		return { name = name, imageId = imageId }
 	end)
 

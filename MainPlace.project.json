@@ -57,6 +57,9 @@
             "GroupRewardGui": {
               "$path": "src/_systems/social/shared/assets/ui/GroupRewardGui.rbxmx"
             },
+            "ReferralReward": {
+              "$path": "src/_systems/social/shared/assets/ui/ReferralReward.rbxmx"
+            },
             "Itemtag": {
               "$path": "src/_systems/stealing/shared/assets/ui/Itemtag.rbxmx"
             }
@@ -111,7 +114,10 @@
           }
         },
         "Packages": {
-          "$path": "src/server/packages"
+          "$path": "src/server/packages",
+          "FriendReferrals": {
+            "$path": "src/_systems/social/server/packages/FriendReferrals.luau"
+          }
         },
         "Monetisation": {
           "$path": "src/_monetisation/source/Monetisation.luau",
@@ -226,6 +232,9 @@
           },
           "Components": {
             "$className": "Folder",
+            "ProductShop": {
+              "$path": "src/client/components/ProductShop.luau"
+            },
             "Spotlight": {
               "$path": "src/_systems/UI-UX/client/components/Spotlight"
             },

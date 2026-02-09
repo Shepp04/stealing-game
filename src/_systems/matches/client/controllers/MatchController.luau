@@ -4,8 +4,8 @@
 -- // Roblox Services
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+local StarterGui = game:GetService("StarterGui")
 
 -- // Utils
 local GuiRefs = require(script.Parent.Parent.Utils:WaitForChild("GuiRefs"))
@@ -91,6 +91,12 @@ function MatchController:HandleGameStateUpdate(kind: GameBroadcastState, ...: an
 			self._gameHUD:SetHeading("You won the match!", Color3.fromRGB(0, 255, 0))
 			self._gameHUD:SetSubheading(nil)
 			_deps.SharedPackages.Sounds:PlaySound("WinMatch")
+
+			-- Prompt add to favourites on win
+			if not self._favouritePromptShown and math.random(1, 2) == 1 then
+				self._favouritePromptShown = true
+				self.Controllers.SocialController:PromptGameFavourite()
+			end
 		else
 			self._gameCamera:Focus(winnerCameraCFrame or CFrame.new(), nil, true)
 			self._gameHUD:SetHeading("Opponent won the match", Color3.fromRGB(255, 0, 0))
@@ -186,6 +192,7 @@ function MatchController:HandleGameStateUpdate(kind: GameBroadcastState, ...: an
 
 	if kind == "YourResult" then
 		self:_destroyDefenderWinningMarker()
+		self:_destroyAttackerMarker()
 		local result: string = (... and (...).result) or "Empty"
 		if result == "Win" then
 			self._gameHUD:SetHeading("STEAL!", Color3.fromRGB(0, 255, 0))
@@ -202,6 +209,7 @@ function MatchController:HandleGameStateUpdate(kind: GameBroadcastState, ...: an
 
 	if kind == "TheirResult" then
 		self:_destroyDefenderWinningMarker()
+		self:_destroyAttackerMarker()
 		local result: string = (... and (...).result) or "Empty"
 		if result == "Win" then
 			self._gameHUD:SetHeading("STOLEN!", Color3.fromRGB(255, 0, 0))
@@ -218,6 +226,12 @@ function MatchController:HandleGameStateUpdate(kind: GameBroadcastState, ...: an
 	if kind == "Reveal" then
 		local payload = ...
 		self:_onReveal(payload)
+		return
+	end
+
+	if kind == "ItemAttacked" then
+		local payload = ...
+		self:_onAttack(payload)
 		return
 	end
 
@@ -248,10 +262,13 @@ function MatchController:StartMatch(tableInstance: Model?)
 		self._gameHUD:SetVisible(true)
 	end
 
-	-- Enabled game input
+	-- Enable game input
 	if self._gameInput then
 		self._gameInput:SetInputEnabled(true)
 	end
+
+	-- Hide backpack
+	self:_toggleBackpack(false)
 
 	-- Store table instance for later use
 	self._tableInstance = tableInstance
@@ -287,6 +304,7 @@ end
 -- ========== Internal ========== --
 
 -- ===== Helpers ===== --
+
 function MatchController:_getBoardModels(boardUserId: number): { Model }
 	-- find the player folder based on slot ordering, or by BoardUserId attribute
 	-- simplest: scan tableInstance descendants for models with BoardUserId attr
@@ -302,20 +320,32 @@ function MatchController:_getBoardModels(boardUserId: number): { Model }
 			table.insert(models, inst)
 		end
 	end
+
+	table.sort(models, function(a: Model, b: Model)
+		local aPos = a:GetAttribute("PosIndex")
+		local bPos = b:GetAttribute("PosIndex")
+		return (aPos :: number) < (bPos :: number)
+	end)
+
 	return models
 end
 
-function MatchController:_getItemModelByIndex(boardUserId: number, itemIndex: number): Model?
+function MatchController:_getItemModelByPosIndex(boardUserId: number, posIndex: number): Model?
 	local models = self:_getBoardModels(boardUserId)
 	for _, model in ipairs(models) do
-		if model:GetAttribute("ItemIndex") == itemIndex then
+		if model:GetAttribute("PosIndex") == posIndex then
 			return model
 		end
 	end
 	return nil
 end
 
+function MatchController:_toggleBackpack(state: boolean)
+	StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Backpack, state)
+end
+
 -- ===== Round Handlers ===== --
+
 function MatchController:_onRoundBegin(payload: any)
 	self._roundRunning = true
 	self._gameHUD:SetHeading("Round start!")
@@ -353,6 +383,7 @@ function MatchController:_onRoundEnd(payload: any)
 end
 
 -- ===== Turn / Phase ===== --
+
 function MatchController:_onTurn(payload: any)
 	-- payload example:
 	-- { phase = "Setup" | "Shuffle" | "Choose", attackerUserId=?, defenderUserId=? }
@@ -424,6 +455,43 @@ function MatchController:_onTurn(payload: any)
 end
 
 -- ===== Reveal / Shuffle / Board Updates ===== --
+
+function MatchController:_onAttack(payload: any)
+	-- payload expected
+	-- { attackerUserId=number, itemModel=Model }
+	if typeof(payload) ~= "table" then return end
+	
+	local itemModel = payload.itemModel
+	if itemModel then
+		local attachPart = itemModel.PrimaryPart or itemModel:FindFirstChildWhichIsA("BasePart")
+		if attachPart then
+			local gui = Instance.new("BillboardGui")
+			gui.Name = "_DefenderWinningMarker"
+			gui.Adornee = attachPart
+			gui.Size = UDim2.fromScale(0, 0) -- Start small for scale-in animation
+			gui.StudsOffset = Vector3.new(0, 0, 0)
+			gui.AlwaysOnTop = true
+			gui.Parent = itemModel
+
+			local canvasGroup = Instance.new("CanvasGroup")
+			canvasGroup.Name = "Content"
+			canvasGroup.BackgroundTransparency = 1
+			canvasGroup.Size = UDim2.fromScale(1, 1)
+			canvasGroup.Parent = gui
+
+			local imageLabel = Instance.new("ImageLabel")
+			imageLabel.Size = UDim2.fromScale(1, 1)
+			imageLabel.BackgroundTransparency = 1
+			imageLabel.Image = "rbxassetid://133253873902943"
+			imageLabel.Parent = canvasGroup
+			
+			self._attackerMarkerGui = gui
+			-- Scale in
+			TweenService:Create(gui, TweenInfo.new(0.50, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Size = UDim2.fromScale(0.5, 0.5) }):Play()
+		end
+	end
+end
+
 function MatchController:_onReveal(payload: any)
 	-- payload expected:
 	-- { defenderUserId=number, losingItemMask={ [i]=boolean }, itemModels={ [i]=Model }, revealSeconds=number }
@@ -436,10 +504,10 @@ function MatchController:_onReveal(payload: any)
 		losingItemMask = {}
 	end
 
-	for itemIndex, isLosing in losingItemMask do
+	for posIndex, isLosing in pairs(losingItemMask) do
 		task.spawn(function()
 			self._gameHUD:RevealItemMask(
-				payload.itemModels[itemIndex],
+				payload.itemModels[posIndex],
 				isLosing and "Lose" or "Empty",
 				payload.revealSeconds or 1.25
 			)
@@ -496,36 +564,45 @@ function MatchController:_destroyDefenderWinningMarker()
 	self._defenderWinningMarkerGui = nil
 	if not gui or not gui.Parent then return end
 
-	local canvasGroup = gui:FindFirstChild("Content") :: CanvasGroup?
-	if canvasGroup then
-		local fadeOut = TweenService:Create(canvasGroup, TweenInfo.new(0.3), { GroupTransparency = 1 })
-		fadeOut:Play()
-		fadeOut.Completed:Connect(function()
-			if gui.Parent then
-				gui:Destroy()
-			end
-		end)
-	else
-		gui:Destroy()
-	end
+	local scaleOut = TweenService:Create(gui, TweenInfo.new(0.3), { Size = UDim2.fromScale(0, 0) })
+	scaleOut:Play()
+	scaleOut.Completed:Connect(function()
+		if gui.Parent then
+			gui:Destroy()
+		end
+	end)
+end
+
+function MatchController:_destroyAttackerMarker()
+	local gui = self._attackerMarkerGui
+	self._attackerMarkerGui = nil
+	if not gui or not gui.Parent then return end
+
+	local scaleOut = TweenService:Create(gui, TweenInfo.new(0.3), { Size = UDim2.fromScale(0, 0) })
+	scaleOut:Play()
+	scaleOut.Completed:Connect(function()
+		if gui.Parent then
+			gui:Destroy()
+		end
+	end)
 end
 
 function MatchController:_onAutoAction(payload: any)
 	-- payload example:
-	-- { kind="SetWinningItem"|"SelectItem"|"RevealItem", userId=?, itemIndex=?, content=? }
+	-- { kind="SetWinningItem"|"SelectItem"|"RevealItem", userId=?, posIndex=?, content=? }
 	if typeof(payload) ~= "table" then return end
 
 	if payload.kind == "SetWinningItem" then
 		if payload.userId == self._localUserId then
 			self:_destroyDefenderWinningMarker()
-			local itemModel = self:_getItemModelByIndex(self._localUserId, payload.itemIndex)
+			local itemModel = self:_getItemModelByPosIndex(self._localUserId, payload.posIndex)
 			if itemModel then
 				local attachPart = itemModel.PrimaryPart or itemModel:FindFirstChildWhichIsA("BasePart")
 				if attachPart then
 					local gui = Instance.new("BillboardGui")
 					gui.Name = "_DefenderWinningMarker"
 					gui.Adornee = attachPart
-					gui.Size = UDim2.fromScale(0.8, 0.8)
+					gui.Size = UDim2.fromScale(0, 0) -- Start small for scale-in animation
 					gui.StudsOffset = Vector3.new(0, 0, 0)
 					gui.AlwaysOnTop = true
 					gui.Parent = itemModel
@@ -534,13 +611,12 @@ function MatchController:_onAutoAction(payload: any)
 					canvasGroup.Name = "Content"
 					canvasGroup.BackgroundTransparency = 1
 					canvasGroup.Size = UDim2.fromScale(1, 1)
-					canvasGroup.GroupTransparency = 1
 					canvasGroup.Parent = gui
 
 					local label = Instance.new("TextLabel")
 					label.Size = UDim2.fromScale(1, 1)
 					label.BackgroundTransparency = 1
-					label.Font = Enum.Font.Highway
+					label.Font = Enum.Font.FredokaOne
 					label.TextScaled = true
 					label.Text = "X"
 					label.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -552,8 +628,9 @@ function MatchController:_onAutoAction(payload: any)
 					stroke.Parent = label
 
 					self._defenderWinningMarkerGui = gui
-					-- Fade in
-					TweenService:Create(canvasGroup, TweenInfo.new(0.35), { GroupTransparency = 0 }):Play()
+					-- Scale in
+					task.wait()
+					TweenService:Create(gui, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Size = UDim2.fromScale(0.8, 0.8) }):Play()
 				end
 			end
 		end

@@ -40,6 +40,7 @@ export type StealResultDisplayAPI = {
 	SetCloseButtonText: (self: StealResultDisplayAPI, text: string) -> (),
 	SetCloseButtonColor: (self: StealResultDisplayAPI, color: Color3) -> (),
 	SetRestoreButtonVisible: (self: StealResultDisplayAPI, visible: boolean) -> (),
+	IsVisible: (self: StealResultDisplayAPI) -> boolean,
 	SetVisible: (self: StealResultDisplayAPI, visible: boolean) -> (),
 }
 
@@ -87,6 +88,8 @@ function StealResultDisplay.new(deps: Deps, opts: Opts): StealResultDisplayAPI
 	self._closeButton = opts.closeButton
 	self._restoreButton = opts.restoreButton
 
+	self._visibleToken = 0
+
 	return self
 end
 
@@ -116,14 +119,27 @@ function StealResultDisplay:SetCloseButtonColor(color: Color3)
 end
 
 function StealResultDisplay:SetRestoreButtonVisible(visible: boolean)
-	-- == Temporarily disabled == --
-	if true then self._restoreButton.container.Visible = false; return end
 	self._restoreButton.container.Visible = visible
+end
+
+function StealResultDisplay:IsVisible(): boolean
+	return self._visible
 end
 
 function StealResultDisplay:SetVisible(visible: boolean)
 	self.root.Enabled = visible
 	self:_toggleBackpack(not visible)
+	self._visible = visible
+
+	if visible then
+		self._visibleToken += 1
+		local tok = self._visibleToken
+		task.delay(20, function()
+			if self:IsVisible() and tok == self._visibleToken then
+				self:SetVisible(false)
+			end
+		end)
+	end
 end
 
 -- ========== Internal ========== --
@@ -142,6 +158,13 @@ function StealResultDisplay:Init()
 	table.insert(self._conns, self._closeButton.select.MouseButton1Click:Connect(function()
 		-- Hide
 		self:SetVisible(false)
+	end))
+
+	table.insert(self._conns, self._restoreButton.select.MouseButton1Click:Connect(function()
+		_deps.Monetisation.PromptSale("KeepIt")
+		task.delay(5.0, function()
+			self:SetRestoreButtonVisible(false)
+		end)
 	end))
 
 	-- // Hide by default

@@ -14,6 +14,7 @@ export type GameBroadcastState =
 	| "TheirResult"
 	| "AutoAction"
 	| "Reveal"        -- chooser sees bomb/safe mask (no lunch)
+	| "ItemAttacked"  -- players see a cursor over the attacked item
 	| "ShuffleBeat"   -- broadcast pairs so client can animate
 	| "BoardUpdate"   -- a cup got removed / board shrank
 

@@ -4,9 +4,13 @@
 -- // Roblox Services
 local ContextActionService = game:GetService("ContextActionService")
 local Debris = game:GetService("Debris")
+local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
+
+-- // Utils
+local StealingUtils = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Utils"):WaitForChild("Stealing"))
 
 -- // Types
 local GameTypes = require(ReplicatedStorage.Shared.Types.Game)
@@ -91,6 +95,7 @@ local _deps: Deps?
 -- // Constants
 local SAMPLE_ITEM_MODEL = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Models"):WaitForChild("Items"):WaitForChild("SampleItem") :: Model
 local EXPLODE_ANIMATION = Instance.new("Animation"); EXPLODE_ANIMATION.AnimationId = "rbxassetid://126527283467855"
+local CELEBRATE_ANIMATION = Instance.new("Animation"); CELEBRATE_ANIMATION.AnimationId = "rbxassetid://10714352626"
 
 -- ========== Helpers ========== --
 
@@ -135,6 +140,8 @@ function Game.new(deps: Deps, opts: Opts): GameAPI
 	self._turnToken = 0
 	self._dead = false
 	self._conns = {}
+
+	self._heldItemModels = {}
 
 	-- // Validate model
 	local tableInstance = self.ctx.tableInstance
@@ -214,8 +221,9 @@ function Game:HandleAction(player: Player, action: GameAction, payload: { any }?
 	if action == "SetWinningItem" then
 		if self.gameState.phase ~= "Setup" then return end
 		if player.UserId ~= self.gameState.defenderUserId then return end
-		local itemIndex = payload.itemIndex or 0 :: number
-		self:_setWinningItem(player.UserId, itemIndex)
+		
+		local posIndex = payload.posIndex or 0 :: number
+		self:_setWinningItem(player.UserId, posIndex)
 		self:_afterDefenderSetup()
 		return
 	end
@@ -223,8 +231,8 @@ function Game:HandleAction(player: Player, action: GameAction, payload: { any }?
 	if action == "SelectItem" then
 		if self.gameState.phase ~= "Choose" then return end
 		if player.UserId ~= self.gameState.attackerUserId then return end
-		local itemIndex = payload.itemIndex or 0 :: number
-		self:_resolvePick(player.UserId, itemIndex)
+		local posIndex = payload.posIndex or 0
+		self:_resolvePick(player.UserId, posIndex)
 		return
 	end
 
@@ -258,6 +266,7 @@ end
 -- ========== Internal ========== --
 
 -- ===== Internal Helpers ===== --
+
 function Game:_t(key: string, defaultValue: any): any
 	local v = self._tunables[key]
 	if v == nil then
@@ -266,29 +275,47 @@ function Game:_t(key: string, defaultValue: any): any
 	return v
 end
 
-function Game:_setWinningItem(userId: number, itemIndex: number)
-	print("Setting winning item for userId=", userId, " itemIndex=", itemIndex)
+function Game:_findItemByPosIndex(board: BoardState, posIndex: number): (ItemState?, number?)
+	for arrayIndex, it in ipairs(board.items) do
+		if it.posIndex == posIndex then
+			return it, arrayIndex
+		end
+	end
+	return nil, nil
+end
+
+function Game:_setWinningItem(userId: number, posIndex: number)
+	print("Setting winning item for userId=", userId, " posIndex=", posIndex)
 	local board = self.gameState.boards[userId]
 	if not board or board.winningItemChosen then warn("No board found or winning item already chosen for userId=", userId) return end
 
-	itemIndex = clampInt(itemIndex, 1, #board.items)
+	posIndex = clampInt(posIndex, 1, #board.positions)
+
+	-- validate there is an item currently occupying this posIndex
+	local item = self:_findItemByPosIndex(board, posIndex)
+	if not item then
+		warn("No item found at posIndex=", posIndex, "for userId=", userId)
+		return
+	end
+
 	-- mark winning item placeholder; actual contents assigned later
 	board.winningItemChosen = true
-	board._winningItemIndex = itemIndex
+	board._winningPosIndex = posIndex
 
 	self.ctx.broadcast("AutoAction", {
 		kind = "SetWinningItem",
 		userId = userId,
-		itemIndex = itemIndex,
+		posIndex = posIndex,
 	})
 end
 
 function Game:_autoSetWinningItem(userId: number)
-	print("Auto-setting winning item for userId=", userId)
 	local board = self.gameState.boards[userId]
 	if not board or board.winningItemChosen then warn("No board found or winning item already chosen for userId=", userId, board, board and board.winningItemChosen) return end
-	local idx = math.random(1, #board.items)
-	self:_setWinningItem(userId, idx)
+	if #board.items == 0 then return end
+
+	local it = board.items[math.random(1, #board.items)]
+	self:_setWinningItem(userId, it.posIndex)
 end
 
 function Game:_assignBoardContents(userId: number)
@@ -305,14 +332,21 @@ function Game:_assignBoardContents(userId: number)
 		item.content = "Empty"
 	end
 
-	local winningItemIndex = board._winningItemIndex or math.random(1, n)
-	board.items[winningItemIndex].content = "Win"
+	local winningPosIndex = board._winningPosIndex
+	if not winningPosIndex then
+		winningPosIndex = board.items[math.random(1, n)].posIndex
+	end
+
+	local winningItem = self:_findItemByPosIndex(board, winningPosIndex)
+	assert(winningItem, "Winning item missing at posIndex")
+
+	winningItem.content = "Win"
 
 	-- fill losing items + empties in remaining slots
 	local remaining = {}
-	for i = 1, n do
-		if i ~= winningItemIndex then
-			table.insert(remaining, i)
+	for _, it in ipairs(board.items) do
+		if it.posIndex ~= winningPosIndex then
+			table.insert(remaining, it.posIndex)
 		end
 	end
 
@@ -324,8 +358,11 @@ function Game:_assignBoardContents(userId: number)
 
 	-- losing items first
 	for i = 1, numLosingItems do
-		local idx = remaining[i]
-		board.items[idx].content = "Lose"
+		local pos = remaining[i]
+		local losingItem = self:_findItemByPosIndex(board, pos)
+		if losingItem then
+			losingItem.content = "Lose"
+		end
 	end
 
 	-- remaining are empty safe (already Empty)
@@ -353,7 +390,7 @@ function Game:_beginTurn(attackerUserId: number, defenderUserId: number)
 	local defenderBoard = self.gameState.boards[defenderUserId]
 	if defenderBoard then
 		defenderBoard.winningItemChosen = false
-		defenderBoard._winningItemIndex = nil
+		defenderBoard._winningPosIndex = nil
 	end
 
 	for _, plr in ipairs(self.ctx.getPlayers()) do
@@ -627,12 +664,13 @@ function Game:_beginChoose(attackerUserId: number)
 		if not defenderUserId then return end
 		local board = self.gameState.boards[defenderUserId]
 		if not board or #board.items == 0 then return end
-		local idx = math.random(1, #board.items)
-		self:_resolvePick(attackerUserId, idx)
+
+		local it = board.items[math.random(1, #board.items)]
+		self:_resolvePick(attackerUserId, it.posIndex)
 	end)
 end
 
-function Game:_resolvePick(attackerUserId: number, itemIndex: number)
+function Game:_resolvePick(attackerUserId: number, posIndex: number)
 	if self._dead then return end
 	-- Invalidate choose-phase countdown so "Skipping pick in Xs" stops and timeout callback no-ops
 	self:_nextTurnToken()
@@ -643,20 +681,38 @@ function Game:_resolvePick(attackerUserId: number, itemIndex: number)
 	local board = self.gameState.boards[defenderUserId]
 	if not board then return end
 
-	itemIndex = clampInt(itemIndex, 1, #board.items)
-	local item = board.items[itemIndex]
-	if not item then return end
+	posIndex = clampInt(posIndex, 1, #board.positions)
+	local item, arrayIndex = self:_findItemByPosIndex(board, posIndex)
+	if not item or not arrayIndex then return end
 
 	-- Reveal to all (client can animate opening)
 	self.ctx.broadcast("AutoAction", {
 		kind = "RevealItem",
 		defenderUserId = defenderUserId,
-		itemIndex = itemIndex,
+		posIndex = posIndex,
 		content = item.content,
 	})
 
+	-- Zoom the clients' in on the chosen item and build suspense
+	local itemCF = item.instance:GetPivot()
+	self.ctx.broadcast("Camera", {
+		cframe = CFrame.new(itemCF.Position + itemCF.RightVector * -2 + itemCF.UpVector * 0.8, itemCF.Position),
+		subject = item.instance,
+		tween = true,
+	})
+
+	self.ctx.broadcast("ItemAttacked", {
+		attackerUserId = attackerUserId,
+		itemModel = item.instance,
+	})
+
+	-- Then show the result and remove the item model
+	task.wait(1.5)
+
+	self:_removeItem(defenderUserId, arrayIndex)
+
 	if item.content == "Lose" then
-		self:_onLosingItemPicked(attackerUserId, defenderUserId, itemIndex)
+		self:_onLosingItemPicked(attackerUserId, defenderUserId)
 
 		-- attacker loses, defender wins round
 		local winner = Players:GetPlayerByUserId(defenderUserId)
@@ -665,7 +721,7 @@ function Game:_resolvePick(attackerUserId: number, itemIndex: number)
 	end
 
 	if item.content == "Win" then
-		self:_onWinningItemPicked(attackerUserId, defenderUserId, itemIndex)
+		self:_onWinningItemPicked(attackerUserId, defenderUserId, item)
 
 		-- attacker wins round
 		local winner = Players:GetPlayerByUserId(attackerUserId)
@@ -686,7 +742,6 @@ function Game:_resolvePick(attackerUserId: number, itemIndex: number)
 		end
 	end
 
-	self:_removeItem(defenderUserId, itemIndex)
 	task.wait(2.0) -- wait before moving on
 	
 	-- Swap attacker/defender
@@ -705,23 +760,22 @@ function Game:_endRound(winner: Player?)
 	})
 
 	if self._onGameEnd then
-		self._onGameEnd(winner)
+		self._onGameEnd(winner, self.gameState.defenderUserId)
 	end
 end
 
 -- ===== Reveal and Shuffle ===== --
+
 function Game:_revealLosingItemMask(attackerUserId: number, defenderUserId: number)
 	local board = self.gameState.boards[defenderUserId]
 	if not board then return end
 
-	local mask = {}
-	for i, item in ipairs(board.items) do
-		mask[i] = (item.content == "Lose") -- true if losing item (bomb), false otherwise
-	end
-
-	local itemModels = {} :: { [number]: Model }
-	for i, item in ipairs(board.items) do
-		itemModels[i] = item.instance
+	local mask = table.create(#board.positions)
+	local itemModels = table.create(#board.positions)
+	for _, item in ipairs(board.items) do
+		local pos = item.posIndex
+		mask[pos] = (item.content == "Lose") -- true if losing item (bomb), false otherwise
+		itemModels[pos] = item.instance
 	end
 
 	task.wait(1.0) -- small delay before reveal
@@ -737,7 +791,7 @@ function Game:_revealLosingItemMask(attackerUserId: number, defenderUserId: numb
 	end
 end
 
-function Game:_onLosingItemPicked(attackerUserId: number, defenderUserId: number, itemIndex: number)
+function Game:_onLosingItemPicked(attackerUserId: number, defenderUserId: number)
 	-- Send text info to client
 	for _, plr in ipairs(self.ctx.getPlayers()) do
 		if plr.UserId == attackerUserId then
@@ -792,7 +846,7 @@ function Game:_onLosingItemPicked(attackerUserId: number, defenderUserId: number
 	end
 end
 
-function Game:_onWinningItemPicked(attackerUserId: number, defenderUserId: number, itemIndex: number)
+function Game:_onWinningItemPicked(attackerUserId: number, defenderUserId: number, item: ItemState)
 	-- Send text info to client
 	for _, plr in ipairs(self.ctx.getPlayers()) do
 		if plr.UserId == attackerUserId then
@@ -805,12 +859,72 @@ function Game:_onWinningItemPicked(attackerUserId: number, defenderUserId: numbe
 			})
 		end
 	end
-
-	-- Create a celebratory effect at the attacker's character
+	
 	local attacker = Players:GetPlayerByUserId(attackerUserId)
 	local attackerChar = attacker and attacker.Character
 	local attackerRoot = attackerChar and attackerChar:FindFirstChild("HumanoidRootPart") :: BasePart?
-	if attackerRoot then
+	local attackerHuman = attackerChar and attackerChar:FindFirstChildOfClass("Humanoid") :: Humanoid?
+	local defender = Players:GetPlayerByUserId(defenderUserId)
+
+	local heldItemId = defender and _deps.Services.StealingService:GetPlayerHeldItemId(defender)
+	if heldItemId then
+		local heldItemInfo = _deps.GameData.Get("StealableItem", heldItemId)
+		if heldItemInfo then
+			local model = StealingUtils.getStealableItemModelFromPath(heldItemInfo.modelPath or {})
+			if model then
+				model = model:Clone()
+
+				local handle = Instance.new("Part")
+				handle.Name = "Handle"
+				handle.CFrame = model:GetPivot()
+				handle.Size = Vector3.new(1, 1, 1)
+				handle.Transparency = 1
+				handle.CanCollide = false
+				handle.Anchored = true
+		
+				for _, d in model:GetDescendants() do
+					if d:IsA("BasePart") then
+						d.CanCollide = false
+						d.Anchored = false
+						d.Massless = true
+		
+						local weld = Instance.new("WeldConstraint")
+						weld.Part0 = d
+						weld.Part1 = handle
+						weld.Parent = d
+					end
+				end
+				
+				handle.Parent = model
+				model:ScaleTo(0.50)
+
+				if item.instance and item.instance:IsA("Model") then
+					model:PivotTo(item.instance:GetPivot())
+				end
+				model.Parent = self.ctx.tableInstance
+
+				table.insert(self._heldItemModels, model)
+
+				if attackerRoot then
+					task.delay(1.0, function()
+						-- Lerp the held item over to the attacker's player
+						local startCFrame = model:GetPivot()
+						local goalCFrame = attackerRoot.CFrame
+						for i = 0, 1, 0.025 do
+							if not model.Parent then continue end
+							model:PivotTo(startCFrame:Lerp(goalCFrame, i ^ 2))
+							task.wait()
+						end
+						model.Parent = Lighting
+					end)
+				end
+			end
+		end
+	end
+
+	-- Create a celebratory effect at the attacker's character
+	if attackerRoot and attackerHuman then
+		task.wait(0.75)
 		self.ctx.broadcast("Camera", {
 			cframe = CFrame.new(
 				attackerRoot.Position + attackerRoot.CFrame.LookVector * 5 + Vector3.new(0, 2, 0),
@@ -819,6 +933,19 @@ function Game:_onWinningItemPicked(attackerUserId: number, defenderUserId: numbe
 			subject = nil,
 			tween = true,
 		})
+
+		local animator = attackerHuman:FindFirstChildOfClass("Animator")
+		if not animator then
+			animator = Instance.new("Animator")
+			animator.Parent = attackerHuman
+		end
+		local animTrack = animator:LoadAnimation(CELEBRATE_ANIMATION) -- explosion animation
+		animTrack:Play()
+
+		task.delay(1.5, function()
+			animTrack:Stop()
+		end)
+
 		task.wait(2.0)
 	end
 end
@@ -913,6 +1040,12 @@ function Game:_applySwapPairs(defenderUserId: number, pairs: { {a: number, b: nu
 		end
 	end
 
+	-- push posIndex to models
+	for _, it in ipairs(board.items) do
+		if it.instance then
+			it.instance:SetAttribute("PosIndex", it.posIndex)
+		end
+	end
 	-- Reposition moved items to their slot CFrames (lerp)
 	for _, item in ipairs(board.items) do
 		local slotCF = board.positions[item.posIndex]
@@ -936,45 +1069,34 @@ function Game:_applySwapPairs(defenderUserId: number, pairs: { {a: number, b: nu
 end
 
 -- ===== Board Management ===== --
-function Game:_removeItem(boardUserId: number, itemIndex: number)
+
+function Game:_removeItem(boardUserId: number, arrayIndex: number)
 	local board = self.gameState.boards[boardUserId]
 	if not board then return end
-	local item = board.items[itemIndex]
-	if not item then return end
 
-	-- destroy instance
-	if item.instance and item.instance.Parent then
-		item.instance:Destroy()
+	local removed = board.items[arrayIndex]
+	if not removed then return end
+
+	local removedPosIndex = removed.posIndex
+
+	-- destroy instance (leaves an empty slot visually)
+	if removed.instance and removed.instance.Parent then
+		removed.instance:Destroy()
 	end
 
-	table.remove(board.items, itemIndex)
+	-- remove from array (array indices shift, but posIndex values do NOT)
+	table.remove(board.items, arrayIndex)
 
-	--[[
-	-- Re-pack posIndex to 1..n and reposition
-	for i, c in ipairs(board.items) do
-		c.posIndex = i
-		local slotCF = board.positions[i]
-		if slotCF then
-			-- Lerp to new position
-			task.spawn(function()
-				local startCF = c.instance:GetPivot()
-				local duration = 0.3
-				local elapsed = 0
-				while elapsed < duration do
-					local alpha = elapsed / duration
-					local newCF = startCF:Lerp(slotCF, alpha)
-					c.instance:PivotTo(newCF)
-					task.wait()
-					elapsed += task.wait()
-				end
-				c.instance:PivotTo(slotCF)
-			end)
+	-- keep attributes aligned (posIndex stays the same)
+	for _, it in ipairs(board.items) do
+		if it.instance then
+			it.instance:SetAttribute("PosIndex", it.posIndex)
 		end
 	end
-	--]]
 
 	self.ctx.broadcast("BoardUpdate", {
 		boardUserId = boardUserId,
+		removedPosIndex = removedPosIndex, -- optional but useful
 		numItems = #board.items,
 	})
 end
@@ -1044,7 +1166,8 @@ function Game:_spawnBoardForPlayer(player: Player, seatIndex: number)
 		m:PivotTo(positions[i])
 		m.Parent = itemsFolder
 
-		m:SetAttribute("ItemIndex", i)
+		-- m:SetAttribute("ItemIndex", i) -- stable id
+		m:SetAttribute("PosIndex", i) -- slot index - changes with shuffles and compaction
 		m:SetAttribute("BoardUserId", player.UserId)
 
 		table.insert(items, {
@@ -1115,6 +1238,14 @@ function Game:Destroy()
 		end
 	end
 	table.clear(self.gameState.boards)
+
+	-- Cleanup held item model clones
+	for _, model in self._heldItemModels do
+		if model and model.Parent then
+			model:Destroy()
+		end
+	end
+	table.clear(self._heldItemModels)
 
 	-- Disconnect conns
 	for _, c in ipairs(self._conns) do

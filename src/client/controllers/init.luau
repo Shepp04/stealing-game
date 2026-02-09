@@ -101,7 +101,7 @@ function API.InitAll(extraDeps: any?)
 		if typeof(wrapper.module.Init) == "function" then
 			wrapper.module:Init(deps)
 		end
-		-- print("[Controllers] Inited", wrapper.name)
+		print("[Controllers] Inited", wrapper.name)
 	end
 
 	API._inited = true
@@ -117,7 +117,7 @@ function API.StartAll()
 		if typeof(wrapper.module.Start) == "function" then
 			wrapper.module:Start()
 		end
-		-- print("[Controllers] Started", wrapper.name)
+		print("[Controllers] Started", wrapper.name)
 	end
 	API._started = true
 end

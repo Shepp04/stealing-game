@@ -4,7 +4,6 @@
 -- // Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
-local StarterGui = game:GetService("StarterGui")
 local TweenService = game:GetService("TweenService")
 
 -- // Utils
@@ -293,7 +292,7 @@ function GameHUD:RevealItemMask(itemModel: Model, contentType: ItemContent, dura
 	highlight.OutlineTransparency = 1
 	highlight.Parent = itemModel
 
-	-- BillboardGui label: "Bomb" or "?" with CanvasGroup for fade in/out
+	-- BillboardGui label: "Bomb" or "?" with CanvasGroup (tween Size for fade effect)
 	local attachPart = itemModel.PrimaryPart or itemModel:FindFirstChildWhichIsA("BasePart")
 	local labelGui: BillboardGui? = nil
 	local canvasGroup: CanvasGroup? = nil
@@ -301,8 +300,8 @@ function GameHUD:RevealItemMask(itemModel: Model, contentType: ItemContent, dura
 		labelGui = Instance.new("BillboardGui")
 		labelGui.Name = "RevealLabel"
 		labelGui.Adornee = attachPart
-		labelGui.Size = UDim2.fromScale(0.5, 0.5)
-		labelGui.StudsOffset = Vector3.new(0, 0.50, 0)
+		labelGui.Size = UDim2.fromScale(0, 0) -- Start small for scale-in animation
+		labelGui.StudsOffset = Vector3.new(0, 0.12, 0)
 		labelGui.AlwaysOnTop = true
 		labelGui.Parent = itemModel
 
@@ -310,7 +309,6 @@ function GameHUD:RevealItemMask(itemModel: Model, contentType: ItemContent, dura
 		canvasGroup.Name = "Content"
 		canvasGroup.BackgroundTransparency = 1
 		canvasGroup.Size = UDim2.fromScale(1, 1)
-		canvasGroup.GroupTransparency = 1
 		canvasGroup.Parent = labelGui
 
 		if contentType == "Lose" then
@@ -323,7 +321,7 @@ function GameHUD:RevealItemMask(itemModel: Model, contentType: ItemContent, dura
 			local label = Instance.new("TextLabel")
 			label.Size = UDim2.fromScale(1, 1)
 			label.BackgroundTransparency = 1
-			label.Font = Enum.Font.Highway
+			label.Font = Enum.Font.FredokaOne
 			label.TextScaled = true
 			label.Text = "?"
 			label.TextColor3 = if contentType == "Lose" then Color3.fromRGB(255, 80, 80) else Color3.fromRGB(80, 255, 80)
@@ -338,9 +336,10 @@ function GameHUD:RevealItemMask(itemModel: Model, contentType: ItemContent, dura
 
 	-- Tween in the highlight
 	TweenService:Create(highlight, TweenInfo.new(0.5), { FillTransparency = 0, OutlineTransparency = 0 }):Play()
-	-- Fade in the label
-	if canvasGroup then
-		TweenService:Create(canvasGroup, TweenInfo.new(0.35), { GroupTransparency = 0 }):Play()
+	-- Scale in the label
+	if labelGui then
+		task.wait()
+		TweenService:Create(labelGui, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Size = UDim2.fromScale(0.5, 0.5) }):Play()
 	end
 	task.wait(duration or 1.0)
 
@@ -349,26 +348,20 @@ function GameHUD:RevealItemMask(itemModel: Model, contentType: ItemContent, dura
 	tween:Play()
 	tween.Completed:Wait()
 	highlight:Destroy()
+
 	if labelGui and labelGui.Parent then
-		if canvasGroup then
-			local fadeOut = TweenService:Create(canvasGroup, TweenInfo.new(0.3), { GroupTransparency = 1 })
-			fadeOut:Play()
-			fadeOut.Completed:Wait()
-		end
+		local scaleOut = TweenService:Create(labelGui, TweenInfo.new(0.3), { Size = UDim2.fromScale(0, 0) })
+		scaleOut:Play()
+		scaleOut.Completed:Wait()
 		labelGui:Destroy()
 	end
 end
 
 function GameHUD:SetVisible(visible: boolean)
 	self._root.Enabled = visible
-	self:_toggleBackpack(not visible)
 end
 
 -- ========== Internal ========== --
-
-function GameHUD:_toggleBackpack(state: boolean)
-	StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Backpack, state)
-end
 
 -- ========== Life Cycle ========== --
 

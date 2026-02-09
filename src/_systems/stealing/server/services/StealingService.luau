@@ -310,8 +310,10 @@ function StealingService:PerformExchange(winner: Player, loser: Player)
 	local loserNewHeldItemId: string = loserOldHeldItemId -- set to old as default
 
 	-- Currency info to send to client display
-	local earnedCurrencyAmount: number
-	local earnedCurrencyId: string
+	local winnerEarnedCurrencyAmount: number
+	local winnerEarnedCurrencyId: string
+	local loserEarnedCurrencyAmount: number
+	local loserEarnedCurrencyId: string
 
 	-- Winner logic
 	if winnerTier < loserTier then
@@ -319,45 +321,35 @@ function StealingService:PerformExchange(winner: Player, loser: Player)
 		local loserItemId = self:GetPlayerHeldItemId(loser)
 		self:SetPlayerHeldItemId(winner, loserItemId)
 		winnerNewHeldItemId = loserItemId
+	elseif winnerTier >= loserTier then
 
-		-- No currency
-	elseif winnerTier == loserTier then
-		-- Winner gets next tier item (if exists)
-		local targetTier = winnerTier + 1
-		local itemId = self:GetHeldItemIdFromTier(targetTier)
-		if itemId then
-			self:SetPlayerHeldItemId(winner, itemId)
-			winnerNewHeldItemId = itemId
-
-			-- No currency
-		else
-			-- No higher tier item, do nothing or give reward
-			warn("[StealingService] No higher tier item for tier:", targetTier)
-
-			-- Give currency
-			local currencyId = _deps.Tunables.winCurrencyAmount or "Cash"
-			local amount = _deps.Tunables.winCurrencyAmount or 15
-			local success, breakdown = self.Services.CurrencyService:GiveCurrency(
-				winner, currencyId, amount, true
-			)
-			if success then
-				earnedCurrencyId = currencyId
-				earnedCurrencyAmount = breakdown and breakdown.Total or amount
+		-- === Testing - do nothing for now === --
+		if false then
+			-- Winner gets next tier item (if exists)
+			local targetTier = winnerTier + 1
+			local itemId = self:GetHeldItemIdFromTier(targetTier)
+			if itemId then
+				self:SetPlayerHeldItemId(winner, itemId)
+				winnerNewHeldItemId = itemId
+			else
+				-- No higher tier item, do nothing or give reward
+				warn("[StealingService] No higher tier item for tier:", targetTier)
 			end
 		end
-	else
-		-- Winner already has higher tier, do nothing or give reward
-		warn("[StealingService] Winner already has higher tier:", winnerTier, "vs loser tier:", loserTier)
 
-		-- Give currency
-		local currencyId = _deps.Tunables.winCurrencyAmount or "Cash"
-		local amount = _deps.Tunables.winCurrencyAmount or 15
+	end
+
+	-- Give winner currency
+	local winnerOldHeldItemInfo = _deps.GameData.Get("StealableItem", winnerOldHeldItemId)
+	if winnerOldHeldItemInfo and winnerOldHeldItemInfo.currencyData then
+		local currencyId = winnerOldHeldItemInfo.currencyData.winCurrencyId or "Cash"
+		local amount = winnerOldHeldItemInfo.currencyData.winAmount or 15
 		local success, breakdown = self.Services.CurrencyService:GiveCurrency(
 			winner, currencyId, amount, true
 		)
 		if success then
-			earnedCurrencyId = currencyId
-			earnedCurrencyAmount = breakdown and breakdown.Total or amount
+			winnerEarnedCurrencyId = currencyId
+			winnerEarnedCurrencyAmount = breakdown and breakdown.Total or amount
 		end
 	end
 
@@ -365,6 +357,31 @@ function StealingService:PerformExchange(winner: Player, loser: Player)
 	local baseHeldItemId = self:GetHeldItemIdFromTier(0)
 	self:SetPlayerHeldItemId(loser, baseHeldItemId)
 	loserNewHeldItemId = baseHeldItemId
+
+	loserEarnedCurrencyId = _deps.Tunables.loseCurrencyId or "Cash"
+	loserEarnedCurrencyAmount = _deps.Tunables.loseCurrencyAmount or 3
+
+	-- Update last item stolen/lost
+	local now = os.clock()
+	local winnerProfile = _deps.DataInterface:GetPlayerProfile(winner)
+	if winnerProfile and winnerProfile.Data and winnerProfile.Data.Stealing then
+		winnerProfile.Data.Stealing.lastItemStolen = {
+			itemId = loserOldHeldItemId,
+			timestamp = now
+		}
+	end
+
+	local loserProfile = _deps.DataInterface:GetPlayerProfile(loser)
+	if loserProfile and loserProfile.Data and loserProfile.Data.Stealing then
+		loserProfile.Data.Stealing.lastItemLost = {
+			itemId = loserOldHeldItemId,
+			timestamp = now
+		}
+	end
+
+	-- == Debug == --
+	print("[StealingService] Match Winner currencyAmount:", winnerEarnedCurrencyAmount, "currencyId:", winnerEarnedCurrencyId)
+	print("[StealingService] Match Loser currencyAmount:", loserEarnedCurrencyAmount, "currencyId:", loserEarnedCurrencyId)
 
 	-- Display info on the clients
 	self._stealResultRemote:FireClient(winner, {
@@ -374,8 +391,8 @@ function StealingService:PerformExchange(winner: Player, loser: Player)
 		opponentNewHeldItemId = loserNewHeldItemId,
 		oldHeldItemId = winnerOldHeldItemId,
 		newHeldItemId = winnerNewHeldItemId,
-		earnedCurrencyAmount = earnedCurrencyAmount,
-		earnedCurrencyId = earnedCurrencyId,
+		earnedCurrencyAmount = winnerEarnedCurrencyAmount,
+		earnedCurrencyId = winnerEarnedCurrencyId,
 	})
 	self._stealResultRemote:FireClient(loser, {
 		opponentUserId = winner.UserId,
@@ -384,8 +401,8 @@ function StealingService:PerformExchange(winner: Player, loser: Player)
 		opponentNewHeldItemId = winnerNewHeldItemId,
 		oldHeldItemId = loserOldHeldItemId,
 		newHeldItemId = loserNewHeldItemId,
-		earnedCurrencyAmount = earnedCurrencyAmount,
-		earnedCurrencyId = earnedCurrencyId,
+		earnedCurrencyAmount = loserEarnedCurrencyAmount,
+		earnedCurrencyId = loserEarnedCurrencyId,
 	})
 end
 
@@ -451,6 +468,11 @@ function StealingService:_onPlayerAdded(player: Player)
 	player.CharacterAdded:Connect(function(character)
 		self:_onCharacterAdded(player, character)
 	end)
+
+	-- === Testing === --
+	-- local profile = _deps.DataInterface:GetPlayerProfile(player, true)
+	-- profile.Data.Stats = nil
+	-- profile.Data.Stealing = nil
 end
 
 -- ========== Life Cycle ========== --
@@ -476,6 +498,8 @@ function StealingService:Init(deps: Deps)
 			firstSeenAt: number,
 			timesSeen: number,
 		} },
+		lastItemLost = nil :: { itemId: string, timestamp: number }?,
+		lastItemStolen = nil :: { itemId: string, timestamp: number }?,
 	})
 end
 

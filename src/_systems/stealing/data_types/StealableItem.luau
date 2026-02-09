@@ -18,6 +18,8 @@ export type DataEntry = {
 	currencyData: {
 		buyPrice: number,
 		buyCurrencyId: string,
+		winAmount: number,
+		winCurrencyId: string,
 	}?
 }
 
@@ -53,23 +55,27 @@ local DATA: { [string]: DataEntry } = {
 		currencyData = {
 			buyPrice = 0,
 			buyCurrencyId = "Cash",
+			winAmount = 25,
+			winCurrencyId = "Cash",
 		},
 	},
 
-	["salad"] = {
+	["Ramen"] = {
 		tier = 1,
-		name = "Salad",
+		name = "Ramen",
 		icon = nil,
 		rarity = "Common",
-		modelPath = { "Salad" }, -- relative to STEALABLE_ITEM_MODELS_FOLDER in StealingService
+		modelPath = { "Ramen" }, -- relative to STEALABLE_ITEM_MODELS_FOLDER in StealingService
 		
 		textData = {
 			primaryColor = Color3.fromRGB(20, 198, 0),
 			secondaryColor = Color3.fromRGB(80, 208, 16),
 		},
 		currencyData = {
-			buyPrice = 85,
+			buyPrice = 60,
 			buyCurrencyId = "Cash",
+			winAmount = 35,
+			winCurrencyId = "Cash",
 		},
 	},
 
@@ -87,6 +93,8 @@ local DATA: { [string]: DataEntry } = {
 		currencyData = {
 			buyPrice = 195,
 			buyCurrencyId = "Cash",
+			winAmount = 46,
+			winCurrencyId = "Cash",
 		},
 	},
 
@@ -104,6 +112,8 @@ local DATA: { [string]: DataEntry } = {
 		currencyData = {
 			buyPrice = 465,
 			buyCurrencyId = "Cash",
+			winAmount = 58,
+			winCurrencyId = "Cash",
 		},
 	},
 
@@ -121,6 +131,8 @@ local DATA: { [string]: DataEntry } = {
 		currencyData = {
 			buyPrice = 995,
 			buyCurrencyId = "Cash",
+			winAmount = 72,
+			winCurrencyId = "Cash",
 		},
 	},
 
@@ -138,6 +150,8 @@ local DATA: { [string]: DataEntry } = {
 		currencyData = {
 			buyPrice = 1980,
 			buyCurrencyId = "Cash",
+			winAmount = 108,
+			winCurrencyId = "Cash",
 		},
 	},
 
@@ -155,6 +169,8 @@ local DATA: { [string]: DataEntry } = {
 		currencyData = {
 			buyPrice = 4864,
 			buyCurrencyId = "Cash",
+			winAmount = 156,
+			winCurrencyId = "Cash",
 		},
 	},
 
@@ -172,6 +188,8 @@ local DATA: { [string]: DataEntry } = {
 		currencyData = {
 			buyPrice = 9672,
 			buyCurrencyId = "Cash",
+			winAmount = 255,
+			winCurrencyId = "Cash",
 		},
 	},
 
@@ -189,6 +207,8 @@ local DATA: { [string]: DataEntry } = {
 		currencyData = {
 			buyPrice = 19248,
 			buyCurrencyId = "Cash",
+			winAmount = 512,
+			winCurrencyId = "Cash",
 		},
 	},
 }

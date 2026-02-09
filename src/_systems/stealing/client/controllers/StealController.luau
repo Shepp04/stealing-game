@@ -60,6 +60,8 @@ export type StealControllerAPI = {
 	Init: (self: StealControllerAPI, deps: Deps) -> (),
 	Start: (self: StealControllerAPI) -> (),
 	Destroy: (self: StealControllerAPI) -> (),
+
+	IsStealResultVisible: (self: StealControllerAPI) -> boolean,
 }
 
 local StealController = {
@@ -73,6 +75,12 @@ local StealController = {
 -- Private captured deps for intellisense-friendly access
 local _deps: Deps?
 
+-- ========== Public API ========== --
+
+function StealController:IsStealResultVisible(): boolean
+	return self._stealResultDisplay:IsVisible()
+end
+
 -- ========== Internal ========== --
 
 function StealController:_onStealResultReceived(result: StealResult)
@@ -83,8 +91,8 @@ function StealController:_onStealResultReceived(result: StealResult)
 	local opponentNewHeldItemId = result.opponentNewHeldItemId
 	local oldHeldItemId = result.oldHeldItemId
 	local newHeldItemId = result.newHeldItemId
-	local currencyEarnedAmount = result.currencyEarnedAmount
-	local currencyEarnedId = result.currencyEarnedId
+	local earnedCurrencyAmount = result.earnedCurrencyAmount
+	local earnedCurrencyId = result.earnedCurrencyId
 
 	-- Get item info
 	local opponentOldHeldItemInfo = _deps.GameData.Get("StealableItem", opponentOldHeldItemId)
@@ -102,16 +110,32 @@ function StealController:_onStealResultReceived(result: StealResult)
 		self._stealResultDisplay:SetRestoreButtonVisible(false)
 		self._stealResultDisplay:SetSubheading(nil)
 
-		if currencyEarnedAmount and currencyEarnedId then
-			local amountText = CurrencyUtils.GetCurrencyText(currencyEarnedId, currencyEarnedAmount, true)
-			self._stealResultDisplay:SetSubheading("It was converted to " .. (amountText or currencyEarnedId))
+		if oldHeldItemId ~= newHeldItemId then
+			-- Display the upgrade
+			if newHeldItemInfo.currencyData then
+				local currencyId = newHeldItemInfo.currencyData.winCurrencyId
+				local amount = newHeldItemInfo.currencyData.winAmount
+				if currencyId and amount then
+					local currencyText = CurrencyUtils.GetCurrencyText(currencyId, amount, false)
+					self._stealResultDisplay:SetSubheading(newHeldItemInfo.name .. ` earns <font color="#00FF00">$` .. currencyText .. `</font> per win!`)
+				else
+					self._stealResultDisplay:SetSubheading("You are now " .. newHeldItemInfo.name .. " tier")
+				end
+			else
+				self._stealResultDisplay:SetSubheading("You are now " .. newHeldItemInfo.name .. " tier")
+			end
+		elseif earnedCurrencyAmount and earnedCurrencyId then
+			local amountText = CurrencyUtils.GetCurrencyText(earnedCurrencyId, earnedCurrencyAmount, false)
+			self._stealResultDisplay:SetSubheading(`You got <font color="#00FF00">$` .. (amountText or earnedCurrencyId) .. `</font>`)
 		end
 	else
 		self._stealResultDisplay:SetHeading("THEY STOLE YOUR " .. string.upper(oldHeldItemInfo.name) .. "!")
 		self._stealResultDisplay:SetCloseButtonText("Ok :(")
 		self._stealResultDisplay:SetCloseButtonColor(Color3.fromRGB(246, 16, 0))
-		self._stealResultDisplay:SetRestoreButtonVisible(true)
-		self._stealResultDisplay:SetSubheading("You are now " .. newHeldItemInfo.name .. " level")
+		self._stealResultDisplay:SetSubheading("You are now " .. newHeldItemInfo.name .. " tier")
+
+		-- If the player's new held item id isn't equal to the old one (i.e. not stolen from at bottom level) show restore button
+		self._stealResultDisplay:SetRestoreButtonVisible(oldHeldItemId ~= newHeldItemId)
 	end
 
 	-- Show
@@ -132,6 +156,17 @@ function StealController:_onStealingDataChanged(data: { heldItemId: string, seen
 			object:SetDisplay(tier + 1)
 		end
 	end
+
+	-- Refresh cash per win label
+	if heldItemInfo.currencyData then
+		local winCurrencyId = heldItemInfo.currencyData.winCurrencyId
+		local winAmount = heldItemInfo.currencyData.winAmount
+		if winCurrencyId and winAmount then
+			self._cashPerWinLabel.Text = "$" .. CurrencyUtils.GetCurrencyText(winCurrencyId, winAmount, false) .. "/win"
+		end
+	else
+		self._cashPerWinLabel.Text = ""
+	end
 end
 
 -- ========== Life Cycle ========== --
@@ -145,6 +180,9 @@ function StealController:Init(deps: Deps)
 	-- // Get Gui refs
 	local PlayerGui = GuiRefs.GetPlayerGui(Players.LocalPlayer)
 	local StealResultGui = GuiRefs.GetScreenGui(PlayerGui, "StealResult")
+	local StatsGui = GuiRefs.GetScreenGui(PlayerGui, "Stats")
+
+	self._cashPerWinLabel = GuiRefs.Get(StatsGui, { "Frame", "CashPerWin", "Amount" })
 
 	-- // Create a steal result display
 	self._stealResultDisplay = StealResultDisplay.new(_deps, {

@@ -20,6 +20,7 @@ UX._modules = {}
 
 -- ========== Life Cycle ========== --
 function UX:Init()
+	print("Began Init")
 	if self._inited then return end
 	self._inited = true
 	
@@ -29,16 +30,18 @@ function UX:Init()
 			local ok, result = pcall(require, moduleScript)
 			if ok then
 				self._modules[moduleScript.Name] = { name = moduleScript.Name, module = result }
-				-- print(`[UI-UX] Loaded '{moduleScript.Name}' module`)
+				print(`[UI-UX] Loaded '{moduleScript.Name}' module`)
 			else
 				warn(`[UI-UX] Failed to load '{moduleScript.Name}': {result}`)
 			end
 		end
 	end
+	print("Done Init")
 end
 
 -- Start all required modules
 function UX:Start()
+	print("Began Start")
 	if not self._inited or self._started then return end
 	self._started = true
 	
@@ -48,10 +51,11 @@ function UX:Start()
 			if not ok then
 				warn(`[UX] Failed to start module {moduleWrapper.name}: {err}`)
 			else
-				-- print(`[UX] Started module {moduleWrapper.name}`)
+				print(`[UX] Started module {moduleWrapper.name}`)
 			end
 		end
 	end
+	print("Done Start")
 end
 
 function UX:Destroy()

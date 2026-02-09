@@ -6,6 +6,10 @@ local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
+-- // Packages
+local ServerPackages = ServerScriptService:WaitForChild("Server"):WaitForChild("Packages")
+local FriendReferralsPackage = require(ServerPackages:WaitForChild("FriendReferrals"))
+
 -- // Types (generated)
 local ServicesTypes = require(ReplicatedStorage.Shared.Types.Services)
 
@@ -52,11 +56,11 @@ local SocialService = {
 local _deps: Deps?
 
 -- // Constants
-local GROUP_ID = 1234567 -- replace with actual group ID
+local GROUP_ID = 1051266605 -- replace with actual group ID
 local FALLBACK_GROUP_REWARDS: { [number]: { ({ currencyId: string, amount: number } | (player: Player) -> boolean) } } =
 {
 	[1] = {
-		{ currencyId = "Coins", amount = 100 },
+		{ currencyId = "Cash", amount = 500 },
 		function(player: Player)
 			print("Custom reward function executed for player:", player.Name)
 			return true
@@ -85,7 +89,10 @@ function SocialService:ClaimGroupReward(player: Player, groupRewardId: number?):
 	end
 
 	-- Now, check if they are in the group
-	if not player:IsInGroup(GROUP_ID) then
+	local ok, result = pcall(function()
+		return player:IsInGroupAsync(GROUP_ID)
+	end)
+	if not ok or not result then
 		_deps.SharedPackages.Messages:ShowMessage(player, "You must be in the group to claim this reward!", "Error")
 		return false
 	end
@@ -156,6 +163,9 @@ function SocialService:Start()
 	table.insert(self._conns, self._claimGroupRewardRemote.OnServerEvent:Connect(function(player: Player, groupRewardId: number?)
 		self:ClaimGroupReward(player, groupRewardId)
 	end))
+
+	-- // Init friend referrals package
+	FriendReferralsPackage:Init({ Currency = self.Services.CurrencyService, DataInterface = _deps.DataInterface, Tunables = _deps.Tunables })
 end
 
 function SocialService:Destroy()

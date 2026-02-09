@@ -77,7 +77,7 @@ local _friendBoostedCurrencyLabels: { FriendBoostedCurrencyLabel.FriendBoostedCu
 local _friendInviteButtons: { GuiButton } = {}
 
 -- // Constants
-local AUTO_SEND_FRIEND_ALERTS: boolean = false -- Whether to automatically show friend alerts periodically
+local AUTO_SEND_FRIEND_ALERTS: boolean = true -- Whether to automatically show friend alerts periodically
 
 -- ========== Public API ========== --
 
@@ -218,7 +218,7 @@ function SocialController:_getOnlineFriends(): { any }
 		return Players.LocalPlayer:GetFriendsOnline()
 	end)
 	if not success or not friends then
-		warn("[SocialController] Failed to get friends list")
+		-- warn("[SocialController] Failed to get friends list")
 		return {}
 	end
 

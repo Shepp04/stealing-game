@@ -100,7 +100,7 @@ function HeldItemUpgradeStand:SetDisplay(targetTier: number)
 	local currencyId = currencyData.currencyId or "Cash"
 	local currencyInfo = _deps.GameData.Get("Currency", currencyId)
 
-	self._headingLabel.Text = "UPGRADE"
+	self._headingLabel.Text = "GET " .. string.upper(heldItemInfo.name)
 
 	if currencyInfo and currencyInfo.icon then
 		self._currencyIcon.Image = currencyInfo.icon
@@ -111,12 +111,58 @@ function HeldItemUpgradeStand:SetDisplay(targetTier: number)
 		self._currencyIcon.Visible = false
 		self._priceLabel.Text = CurrencyUtils.GetCurrencyText(currencyId, price, true)
 	end
+
+	task.spawn(function()
+		-- Clone a model
+		if self._displayItemModel then
+			self._displayItemModel:Destroy()
+		end
+		local model = StealingUtils.getStealableItemModelFromPath(heldItemInfo.modelPath or {})
+		if not model then return end
+
+		model = model:Clone()
+
+		local handle = Instance.new("Part")
+		handle.Name = "Handle"
+		handle.CFrame = model:GetPivot()
+		handle.Size = Vector3.new(1, 1, 1)
+		handle.Transparency = 1
+		handle.CanCollide = false
+		handle.Anchored = true
+
+		for _, d in model:GetDescendants() do
+			if d:IsA("BasePart") then
+				d.CanCollide = false
+				d.Anchored = false
+				d.Massless = true
+
+				local weld = Instance.new("WeldConstraint")
+				weld.Part0 = d
+				weld.Part1 = handle
+				weld.Parent = d
+			end
+		end
+		
+		model:ScaleTo(1.5)
+		self._displayItemModel = model
+
+		-- Wait for the item spawn part to load in
+		local itemSpawnPart = self.model:WaitForChild("ItemSpawn")
+		if self._displayItemModel ~= model then return end
+
+		model:PivotTo(itemSpawnPart.CFrame)
+		model.Parent = self.model
+		handle.Parent = model
+	end)
 end
 
 function HeldItemUpgradeStand:ClearDisplay(msg: string?)
 	self._priceLabel.Text = ""
 	self._currencyIcon.Visible = false
 	self._headingLabel.Text = msg or ""
+	if self._displayItemModel then
+		self._displayItemModel:Destroy()
+	end
 end
 
 -- ========== Internal ========== --
